@@ -9,6 +9,38 @@ dist/
 sh3-progs.bin
 icon.jpg.bak
 
+# Private configuration; example template stays trackable
+.env
+.env.*
+!.env.example
+
+# Caches and local research/device artifacts
+.cache/
+.port-cache/
+cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+/tmpRepo/
+/r36s-dumps/
+
+# Additional generated build outputs
+/build-*/
+.build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.py[co]
+
 # CCE (code-context-engine)
 # CCE local cache (per-machine, not for version control)
 .cce/
