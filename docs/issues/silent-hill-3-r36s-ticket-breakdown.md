@@ -1,14 +1,14 @@
 # Silent Hill 3 R36S — approved ticket breakdown
 
-Structure approved by user on 2026-11-11; user subsequently authorized local commit of spec, ticket drafts and supporting files. GitHub remains configured tracker; this file records approved breakdown, not replacement local tracker or combined issue. [One-file-per-ticket drafts](silent-hill-3-r36s/README.md) remain local; no tickets published. Issues disabled at read-only check; existing issues/comments/blockers unavailable. No capability gate passed.
+Structure and subsequent publication approved by user on 2026-11-11. GitHub holds current task history; this file records approved breakdown. All [19 implementation issues](silent-hill-3-r36s/README.md) are published, verified open and unlabeled, with 26 native blocking relationships. Local files preserve approved scopes. No capability gate passed.
 
 Canonical requirements: [Silent Hill 3 R36S spec](../specs/silent-hill-3-r36s.md). Research, glossary and ADR links remain in spec. Approved scopes below preserve confirmed launcher → game session → frontend boundary. Host fixtures cover launcher failures and cleanup only; runtime/graphics/media/input/performance acceptance needs actual R36S evidence. Future behavior changes require observed RED–GREEN–REFACTOR under project workflow; documentation drafting uses coverage/dependency validation.
 
 User instruction: **tickets carry no `ready-for-agent` tag**. Prepare these tickets unlabeled; do not create or apply triage labels. No inferred readiness from this breakdown. Earlier spec-publication label default is superseded for this batch.
 
-Numbers below are draft identifiers, not GitHub issue numbers. Structure is approved; publication is not. After later explicit publication approval, create one issue per ticket in dependency order, replace draft blockers with real issue relationships (native edges where supported), and link canonical spec at verified pushed commit. Source is spec file; do not invent or publish parent issue as prerequisite. Existing local feature-issue draft remains unpublished; no parent change/closure authorized.
+Numbers below are stable plan identifiers; [issue index](silent-hill-3-r36s/README.md) maps them to GitHub issues. Tickets were published in dependency order, with native blocking relationships and canonical spec links pinned to verified pushed source revision. Source was spec file; no separate parent issue created or closed. Existing feature overview remains local documentation.
 
-User approved ticket size, blocking edges and current split with “Approve structure; keep local,” then explicitly requested local commits. Local commit is authorized; pushing, tracker publication and closure remain separate. No implementation work, device runs, builds or remote writes performed for this breakdown.
+User initially approved ticket size, blocking edges and split with “Approve structure; keep local,” then authorized commits, push and issue publication. Publication preserves approved scopes and blocker graph. No implementation work, device runs or builds performed; all implementation issues remain open pending their own acceptance.
 
 Blocking edges below gate implementation claims. Prerequisite-free investigation may proceed earlier; completion report alone cannot pass missing capability. No wide prefactor is justified by current evidence. Unknown compatibility/performance/campaign faults become focused follow-up tickets and block affected capability until fixed and rechecked; qualification tickets do not contain unbounded fix-everything scope.
 

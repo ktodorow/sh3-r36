@@ -1,6 +1,6 @@
 # Reach menus and first playable scene through native GLES3
 
-Local GitHub issue draft 05. Structure approved 2026-11-11; publication withheld at user's request. No labels assigned.
+Published as [#5](https://github.com/ktodorow/sh3-nx-r36s/issues/5) on 2026-11-11. No labels assigned. This file preserves approved scope; GitHub issue and comments hold current task history.
 
 ## What to build
 

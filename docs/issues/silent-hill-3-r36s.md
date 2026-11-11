@@ -1,6 +1,6 @@
 # Deliver full Silent Hill 3 port on R36S with native GLES3
 
-Publication draft. Tickets remain unlabeled under latest user instruction; do not apply `ready-for-agent`. Canonical requirements: [Silent Hill 3 R36S spec](../specs/silent-hill-3-r36s.md). Before posting, replace local document links with verified pushed-commit links; keep feature issue open. [Ticket breakdown](silent-hill-3-r36s-ticket-breakdown.md) approved; [individual issue drafts](silent-hill-3-r36s/README.md) remain local at user's request. No parent issue publication implied.
+Feature overview retained from spec drafting. Implementation tracked by [19 published issues](silent-hill-3-r36s/README.md), all open and unlabeled; no separate parent issue created. Do not apply `ready-for-agent`. Canonical requirements: [Silent Hill 3 R36S spec](../specs/silent-hill-3-r36s.md). [Approved breakdown](silent-hill-3-r36s-ticket-breakdown.md) preserves scope and dependency design. Publication does not establish implementation acceptance.
 
 ## Problem Statement
 

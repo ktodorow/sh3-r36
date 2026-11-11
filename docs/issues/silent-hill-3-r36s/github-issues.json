@@ -1,0 +1,223 @@
+{
+  "repository": "ktodorow/sh3-nx-r36s",
+  "source_commit": "4bdb4560594373d824122d4907a88d009e7d7668",
+  "verified_at": "2026-11-11T20:26:09.530301+00:00",
+  "dependency_mode": "native",
+  "issues": [
+    {
+      "draft": 1,
+      "number": 1,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/1",
+      "title": "Validate Game data and record current R36S target",
+      "blocked_by": [],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 2,
+      "number": 2,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/2",
+      "title": "Launch reproducible Linux ARM64 runtime diagnostics",
+      "blocked_by": [
+        1
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 3,
+      "number": 3,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/3",
+      "title": "Render game-derived shader and indexed-draw samples on R36S",
+      "blocked_by": [
+        2
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 4,
+      "number": 4,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/4",
+      "title": "Render game-derived texture and framebuffer samples on R36S",
+      "blocked_by": [
+        2
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 5,
+      "number": 5,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/5",
+      "title": "Reach menus and first playable scene through native GLES3",
+      "blocked_by": [
+        3,
+        4
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 6,
+      "number": 6,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/6",
+      "title": "Preserve representative gameplay and cutscene rendering",
+      "blocked_by": [
+        5
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 7,
+      "number": 7,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/7",
+      "title": "Play normal actions using R36S controls",
+      "blocked_by": [
+        5
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 8,
+      "number": 8,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/8",
+      "title": "Resume saved progress and settings after cold restart",
+      "blocked_by": [
+        5
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 9,
+      "number": 9,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/9",
+      "title": "Preserve game audio and simulation speed at 30 FPS",
+      "blocked_by": [
+        5
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 10,
+      "number": 10,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/10",
+      "title": "Identify original FMVs and measure native decode feasibility",
+      "blocked_by": [
+        2
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 11,
+      "number": 11,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/11",
+      "title": "Play first original FMV and return to gameplay",
+      "blocked_by": [
+        5,
+        9,
+        10
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 12,
+      "number": 12,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/12",
+      "title": "Complete all-original-FMV playback and lifecycle coverage",
+      "blocked_by": [
+        11
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 13,
+      "number": 13,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/13",
+      "title": "Profile correct representative gameplay at 640×480",
+      "blocked_by": [
+        6,
+        9
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 14,
+      "number": 14,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/14",
+      "title": "Select verified 30 FPS profile with conditional 320×240 fallback",
+      "blocked_by": [
+        8,
+        13
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 15,
+      "number": 15,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/15",
+      "title": "Return cleanly from complete sessions and failure paths",
+      "blocked_by": [
+        7,
+        8,
+        12
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 16,
+      "number": 16,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/16",
+      "title": "Sustain hot sessions and repeated transitions within memory limits",
+      "blocked_by": [
+        14,
+        15
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 17,
+      "number": 17,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/17",
+      "title": "Verify complete campaign progression on R36S",
+      "blocked_by": [
+        16
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 18,
+      "number": 18,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/18",
+      "title": "Verify remaining required ending paths and media coverage",
+      "blocked_by": [
+        17
+      ],
+      "state": "open",
+      "labels": []
+    },
+    {
+      "draft": 19,
+      "number": 19,
+      "url": "https://github.com/ktodorow/sh3-nx-r36s/issues/19",
+      "title": "Qualify Full port against canonical R36S acceptance criteria",
+      "blocked_by": [
+        18
+      ],
+      "state": "open",
+      "labels": []
+    }
+  ]
+}

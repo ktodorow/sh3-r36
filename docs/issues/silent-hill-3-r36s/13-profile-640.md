@@ -1,6 +1,6 @@
 # Profile correct representative gameplay at 640×480
 
-Local GitHub issue draft 13. Structure approved 2026-11-11; publication withheld at user's request. No labels assigned.
+Published as [#13](https://github.com/ktodorow/sh3-nx-r36s/issues/13) on 2026-11-11. No labels assigned. This file preserves approved scope; GitHub issue and comments hold current task history.
 
 ## What to build
 

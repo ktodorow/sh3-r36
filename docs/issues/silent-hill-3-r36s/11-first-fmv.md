@@ -1,6 +1,6 @@
 # Play first original FMV and return to gameplay
 
-Local GitHub issue draft 11. Structure approved 2026-11-11; publication withheld at user's request. No labels assigned.
+Published as [#11](https://github.com/ktodorow/sh3-nx-r36s/issues/11) on 2026-11-11. No labels assigned. This file preserves approved scope; GitHub issue and comments hold current task history.
 
 ## What to build
 

@@ -1,6 +1,6 @@
 # Silent Hill 3 full port for R36S
 
-Status: local planning spec. Scope, graphics route, and primary test boundary confirmed by user on 2026-11-11. User authorized local commit of spec, ticket drafts and supporting files; remote publication pending. Implementation and device acceptance have not passed.
+Status: published planning spec. Scope, graphics route, and primary test boundary confirmed by user on 2026-11-11. User approved publication of spec, supporting files and 19 implementation issues. Implementation and device acceptance have not passed.
 
 This is canonical feature spec. Research describes evidence and proposals; this spec defines requested behavior. Tracker issue must link this document and retain task history, prerequisite results, and remaining gaps.
 
@@ -151,7 +151,7 @@ Historical Delver evidence recorded owner's Mali-G31 native GLES3.2 on earlier d
 
 Current port folder name, exact build image/sysroot, decoder integration, optional extension fallbacks, and any media conversion are not silently settled by this spec. First packaging/device task documents folder consistently with `R36S_PORT` before deployment. Research commands are inputs to saved scripts, not authorization for direct remote shell execution. New build/device guides are created when first needed under project workflow.
 
-Synthesis ignore check found private configuration, temporary reference clones, port cache, and device dumps not yet covered. Game/build paths are ignored. No private artifacts were created; adding and verifying missing coverage is prerequisite to those future workflows. Shared research uses portable reference-root locators instead of user-specific absolute paths.
+Synthesis ignore check found private configuration, temporary reference clones, port cache, and device dumps not yet covered. Follow-up ignore work added and verified coverage for these paths, private configuration variants, caches and generated build outputs while retaining `.env.example`. User-provided `.env` remains ignored and untracked; contents were not read during publication. Shared research uses portable reference-root locators instead of user-specific absolute paths. These checks alone do not pass G1.
 
 ### Canonical context and references
 
@@ -161,4 +161,4 @@ Synthesis ignore check found private configuration, temporary reference clones, 
 - [Spec source checks and applicability](../../research_notes/Silent%20Hill%203%20R36S%20spec/source-checks.md), including shared SH2 video-completion precedent and first-hand SH3 palette regression.
 - [Issue workflow](../agents/issue-tracker.md), [triage roles](../agents/triage-labels.md), and [domain workflow](../agents/domain.md).
 
-Issue tracker: `ktodorow/sh3-nx-r36s`. Read-only check on 2026-11-11 found Issues disabled. Tickets must not have `ready-for-agent` tags; retain ticket batch unlabeled without creating triage labels. User approved [19-ticket breakdown](../issues/silent-hill-3-r36s-ticket-breakdown.md), then authorized local commit of [individual issue drafts](../issues/silent-hill-3-r36s/README.md), spec and supporting files. Remote publication requires later explicit approval before pushing, enabling Issues or posting tickets. New feature issue, if separately approved, remains open until actual Full port acceptance; completing documentation work does not close unimplemented feature.
+Issue tracker: `ktodorow/sh3-nx-r36s`. Initial read-only check found Issues disabled; user subsequently enabled Issues and authorized publication. All [19 implementation issues](../issues/silent-hill-3-r36s/README.md) from approved [breakdown](../issues/silent-hill-3-r36s-ticket-breakdown.md) were published and verified open and unlabeled on 2026-11-11, with 26 native blocking relationships. No `ready-for-agent` tags or other labels applied. GitHub issues and comments hold current task history; local files preserve approved scope. No separate parent issue created or closed. Implementation issues remain open until their own acceptance passes; documentation publication does not establish Full port acceptance.

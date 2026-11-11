@@ -1,6 +1,6 @@
 # Verify complete campaign progression on R36S
 
-Local GitHub issue draft 17. Structure approved 2026-11-11; publication withheld at user's request. No labels assigned.
+Published as [#17](https://github.com/ktodorow/sh3-nx-r36s/issues/17) on 2026-11-11. No labels assigned. This file preserves approved scope; GitHub issue and comments hold current task history.
 
 ## What to build
 
