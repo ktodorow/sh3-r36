@@ -1,6 +1,7 @@
 .venv
 build/
 /game
+/SILENT HILL 3/
 src/recomp/gen/
 __pycache__/
 build-switch.log

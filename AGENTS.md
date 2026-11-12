@@ -48,7 +48,7 @@ Keep device connection settings and user-specific reference-repo paths in ignore
 
 ## Docker builds
 
-Compile executables, libraries, and packages only inside reusable Docker Linux ARM environment; default platform is `linux/arm64`, matching current AArch64 scope. Host scripts orchestrate builds locally. Before building, creating/changing build environment, or removing build resources, read `docs/agents/builds.md`.
+Compile executables, libraries, packages, and executable test artifacts only inside reusable Docker environment with lightweight Linux ARM64 base OS and explicit `--platform linux/arm64`. Select base image/sysroot compatible with recorded R36S runtime ABI. Build native AArch64 Linux executables/libraries and PortMaster packages only; do not invoke Nintendo Switch build targets/toolchains or produce Switch executables/packages (such as `.nro`, `.nso`, `.nsp`, or `.xci`). Host scripts orchestrate builds locally. Before building, creating/changing build environment, or removing build resources, read `docs/agents/builds.md`.
 
 Reuse compatible existing environment before creating anything. Create missing environment automatically when a build needs it; avoid duplicate images, builders, and caches. Provide one project-scoped cleanup script for disposable containers, unused build outputs, images, volumes, and build caches; preserve source, final artifacts, and evidence.
 
