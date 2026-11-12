@@ -10,7 +10,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[1]
 
 
-class PreflightLauncherTests(unittest.TestCase):
+class LauncherFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -37,11 +37,63 @@ class PreflightLauncherTests(unittest.TestCase):
             capture_output=True, text=True, timeout=20,
         )
 
+
+class PreflightLauncherTests(LauncherFixture):
     def test_missing_executable_reports_actionable_error_and_preserves_save(self):
         result = self.launch()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Missing sh3.exe", result.stdout + result.stderr)
         self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
+
+    def test_runtime_diagnostics_report_missing_native_binary_and_return(self):
+        result = self.launch(SH3_MODE="runtime-diagnostics")
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("Native runtime missing", result.stderr)
+        self.assertIn("frontend ready", result.stdout)
+        self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
+
+    def test_runtime_failure_keeps_status_logs_and_returns_without_game_data(self):
+        runtime = self.port / "runtime" / "sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\nprintf "native runtime failed\\n" >&2\nexit 7\n')
+        runtime.chmod(0o755)
+        # macOS lacks target's timeout utility; replace that external boundary only.
+        commands = self.root / "bin"
+        commands.mkdir()
+        timeout = commands / "timeout"
+        timeout.write_text('#!/bin/sh\nshift\nexec "$@"\n')
+        timeout.chmod(0o755)
+        result = self.launch(SH3_MODE="runtime-diagnostics", PATH=f"{commands}:{os.environ['PATH']}")
+        self.assertEqual(result.returncode, 7)
+        self.assertIn("native runtime failed", result.stderr)
+        self.assertIn("frontend ready", result.stdout)
+        self.assertEqual((self.port / "runs/fixture/exit-status.txt").read_text().strip(), "7")
+        self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
+
+    def test_installed_runtime_menu_finds_package_without_host_port_environment(self):
+        launcher = self.port / "preflight/ports/Silent Hill 3.sh"
+        launcher.parent.mkdir(parents=True)
+        shutil.copyfile(REPO / "ports/Silent Hill 3.sh", launcher)
+        menu = self.root / "Silent Hill 3 Runtime Diagnostics.sh"
+        shutil.copyfile(REPO / "ports/Silent Hill 3 Runtime Diagnostics.sh", menu)
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\nprintf "native diagnostics reached\\n"\n')
+        runtime.chmod(0o755)
+        commands = self.root / "bin"
+        commands.mkdir()
+        timeout = commands / "timeout"
+        timeout.write_text('#!/bin/sh\nshift\nexec "$@"\n')
+        timeout.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("SH3_")}
+        env.update(XDG_DATA_HOME=str(self.root / "xdg"), PATH=f"{commands}:{os.environ['PATH']}")
+        result = subprocess.run(["bash", str(menu)], env=env, cwd="/", capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("native diagnostics reached", result.stdout)
+        self.assertIn("frontend ready", result.stdout)
+        launches = list((self.port / "runs").glob("*/exit-status.txt"))
+        self.assertEqual(len(launches), 1)
+        self.assertEqual(launches[0].read_text().strip(), "0")
 
     def test_validation_failure_returns_through_portmaster_cleanup(self):
         result = self.launch()

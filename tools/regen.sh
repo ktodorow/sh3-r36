@@ -3,13 +3,13 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 X=$ROOT/third_party/xboxrecomp
-PY=$ROOT/.venv/bin/python3
+PY=${SH3_PYTHON:-$ROOT/.venv/bin/python3}
 B=$ROOT/build
 mkdir -p "$B"
 [ -z "$TRACE" ] && [ -f "$B/trace.json" ] && TRACE="$B/trace.json"  # oracle targets (tools/oracle.py)
 cd "$ROOT"
 if [ "$1" != --recomp-only ]; then
-"$PY" tools/patch_exe.py game/sh3.exe "$B/sh3_ws.exe"  # widescreen code patches
+"$PY" tools/patch_exe.py "${SH3_EXE:-game/sh3.exe}" "$B/sh3_ws.exe"  # ignored patched copy
 "$PY" tools/pe2xbe.py "$B/sh3_ws.exe" "$B/sh3.xbe" --imports "$B/imports.json"
 cd "$X"
 "$PY" -m tools.xbe_parser "$B/sh3.xbe" --json "$B/sh3_analysis.json" --quiet

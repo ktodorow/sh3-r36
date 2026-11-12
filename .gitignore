@@ -1,5 +1,5 @@
 .venv
-build/
+/build/
 /game
 /SILENT HILL 3/
 src/recomp/gen/

@@ -17,8 +17,8 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 FILES = ["scripts/device/inventory.sh", "scripts/device/run.sh",
-         "scripts/device/check-data.sh", "scripts/required-data.txt",
-         "ports/Silent Hill 3.sh"]
+         "scripts/device/check-data.sh", "scripts/device/runtime.sh", "scripts/required-data.txt",
+         "ports/Silent Hill 3.sh", "ports/Silent Hill 3 Runtime Diagnostics.sh"]
 
 
 def config():
@@ -45,7 +45,7 @@ def check_ignores():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["inventory", "preflight"])
+    parser.add_argument("action", choices=["inventory", "preflight", "runtime"])
     parser.add_argument("--reviewed-helpers", type=Path,
                         help="Prior collected inventory directory whose helpers were reviewed")
     args = parser.parse_args()
@@ -61,12 +61,24 @@ def main():
     if not tcp.isdigit() or not 1 <= int(tcp) <= 65535:
         raise ValueError("Invalid R36S_SSH_PORT")
     review = None
-    if args.action == "preflight":
+    if args.action in {"preflight", "runtime"}:
         if not args.reviewed_helpers:
             raise ValueError("Run inventory and review helpers before preflight")
         review = (args.reviewed_helpers / "device" / "portmaster-files.sha256").read_bytes()
         if not review.strip():
             raise ValueError("Reviewed inventory has no PortMaster helpers")
+    runtime_files = []
+    if args.action == "runtime":
+        package = ROOT / "dist/runtime"
+        binary = (package / "sh3").read_bytes()
+        if binary[:6] != b"\x7fELF\x02\x01" or int.from_bytes(binary[18:20], "little") != 183:
+            raise ValueError("Runtime must be ELF64 little-endian AArch64")
+        build = json.loads((package / "build-inputs.json").read_text())
+        selected = Path(cfg.get("SH3_GAME_DIR") or ROOT / "SILENT HILL 3") / "sh3.exe"
+        if hashlib.sha1(selected.read_bytes()).hexdigest() != build["input_sha1"]:
+            raise ValueError("Runtime generated from different owner input")
+        runtime_files = ["sh3", "build-inputs.json", "packages.txt", "compiler.txt", "libc.txt",
+                         "python.txt", "elf.txt", "readelf.txt", "artifacts.sha256"]
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ-") + uuid.uuid4().hex[:6]
     out = ROOT / "r36s-dumps" / port / run_id
     out.mkdir(parents=True)
@@ -136,6 +148,11 @@ def main():
                 dest = payload / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes((ROOT / name).read_bytes())
+            if runtime_files:
+                runtime = payload / "runtime"
+                runtime.mkdir()
+                for name in runtime_files:
+                    (runtime / name).write_bytes((ROOT / "dist/runtime" / name).read_bytes())
             if review:
                 (payload / "reviewed-helpers.sha256").write_bytes(review)
             code = ssh("prepare", "mkdir -p " + shlex.quote(f"/roms2/ports/{port}/runs") +
@@ -154,7 +171,7 @@ def main():
         statuses["collection"] = command(
             "collect", ["scp", *options, "-P", tcp, "-r", host + ":" + remote + "/",
                         str(out / "device")], timeout=120)
-        if args.action == "preflight":
+        if args.action in {"preflight", "runtime"}:
             statuses["launcher-collection"] = command(
                 "collect-launcher", ["scp", *options, "-P", tcp, "-r",
                                      host + ":" + remote + "-launch/", str(out / "launcher")], timeout=120)

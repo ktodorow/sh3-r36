@@ -507,6 +507,10 @@ int main(int argc, char **argv) {
         else socketExit();
     }
 #else
+    if (argc == 2 && !strcmp(argv[1], "--runtime-diagnostics")) {
+        extern int rt_runtime_diagnostics(void);
+        return rt_runtime_diagnostics();
+    }
     const char *dir = argc > 1 ? argv[1] : getenv("SH3_DIR");
 #endif
     if (dir) snprintf(rt_game_dir, sizeof rt_game_dir, "%s", dir);

@@ -1,5 +1,5 @@
 #!/bin/bash
-# SH3 project preflight launcher; no game runtime yet.
+# SH3 project preflight launcher; optional native runtime diagnostics.
 PORT_ROOT=${SH3_PORT_ROOT:-"$(cd "$(dirname "$0")" && pwd)/sh3"}
 DATA_DIR=${SH3_DATA_DIR:-"$PORT_ROOT/gamedata"}
 RUN_ID=${SH3_RUN_ID:-"$(date -u +%Y%m%dT%H%M%SZ)-$$"}
@@ -50,6 +50,19 @@ main() {
     if ! get_controls; then
         echo 'PortMaster controls failed; data validation not attempted.' >&2
         exit 3
+    fi
+    if [ "${SH3_MODE:-preflight}" = runtime-diagnostics ]; then
+        if [ ! -x "$PORT_ROOT/runtime/sh3" ]; then
+            echo 'Native runtime missing; install Docker-built ARM64 diagnostics package.' >&2
+            return 3
+        fi
+        export SDL_GAMECONTROLLERCONFIG="${sdl_controllerconfig:-}"
+        if declare -F pm_platform_helper >/dev/null; then
+            pm_platform_helper "$PORT_ROOT/runtime/sh3"
+        fi
+        cd "$RUN_DIR" || return 3
+        timeout 30s "$PORT_ROOT/runtime/sh3" --runtime-diagnostics
+        return $?
     fi
     bash "${SH3_PACKAGE_DIR:-$PORT_ROOT/preflight}/scripts/device/check-data.sh" "$DATA_DIR" \
         2> "$RUN_DIR/data.stderr.txt"

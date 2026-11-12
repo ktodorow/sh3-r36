@@ -13,7 +13,11 @@ finish() {
     trap - EXIT
     printf '%s\n' "$status" > "$RUN_DIR/execution-status.txt"
     ps -C emulationstation -o pid=,stat=,comm= > "$RUN_DIR/frontend-after.txt" 2>/dev/null || true
+    pgrep -x sh3 > "$RUN_DIR/runtime-pids-after.txt" 2>/dev/null || true
     awk -v root="$PORT_ROOT" 'index($2,root)==1 {print}' /proc/mounts > "$RUN_DIR/port-mounts-after.txt"
+    if [ -s "$RUN_DIR/firmware-libraries-before.sha256" ]; then
+        sha256sum -c "$RUN_DIR/firmware-libraries-before.sha256" > "$RUN_DIR/firmware-libraries-after.txt" 2>&1 || status=3
+    fi
     if [ -s "$RUN_DIR/existing-logs-before.sha256" ]; then
         sha256sum -c "$RUN_DIR/existing-logs-before.sha256" > "$RUN_DIR/existing-logs-after.txt" 2>&1
     fi
@@ -21,8 +25,10 @@ finish() {
 }
 trap finish EXIT
 bash "$PAYLOAD/scripts/device/inventory.sh" "$PORT_ROOT" "$RUN_DIR" || exit 3
+awk 'length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\// {print}' "$RUN_DIR/libraries.txt" \
+    > "$RUN_DIR/firmware-libraries-before.sha256"
 if [ "$ACTION" = inventory ]; then exit 0; fi
-if [ "$ACTION" != preflight ]; then echo 'Unknown action' >&2; exit 3; fi
+if [ "$ACTION" != preflight ] && [ "$ACTION" != runtime ]; then echo 'Unknown action' >&2; exit 3; fi
 if [ ! -s "$PAYLOAD/reviewed-helpers.sha256" ] || \
     ! cmp -s "$PAYLOAD/reviewed-helpers.sha256" "$RUN_DIR/portmaster-files.sha256"; then
     echo 'Installed PortMaster helpers differ from reviewed inventory; refusing to source.' >&2
@@ -37,11 +43,16 @@ if [ -e "$PORT_ROOT/preflight" ] && [ ! -f "$PORT_ROOT/preflight/.sh3-preflight-
     echo 'Existing preflight directory is not project-owned; preserved.' >&2
     exit 3
 fi
-mkdir -p "$PORT_ROOT/preflight/scripts/device" || exit 3
+mkdir -p "$PORT_ROOT/preflight/scripts/device" "$PORT_ROOT/preflight/ports" || exit 3
 cp "$PAYLOAD/scripts/device/check-data.sh" "$PORT_ROOT/preflight/scripts/device/" || exit 3
 cp "$PAYLOAD/scripts/required-data.txt" "$PORT_ROOT/preflight/scripts/" || exit 3
+cp "$PAYLOAD/ports/Silent Hill 3.sh" "$PORT_ROOT/preflight/ports/" || exit 3
 touch "$PORT_ROOT/preflight/.sh3-preflight-owned" || exit 3
 cp "$PAYLOAD/ports/Silent Hill 3.sh" "$MENU" || exit 3
 chmod +x "$MENU" || exit 3
+if [ "$ACTION" = runtime ]; then
+    bash "$PAYLOAD/scripts/device/runtime.sh" "$PORT_ROOT" "$RUN_ID" "$PAYLOAD" "$RUN_DIR"
+    exit $?
+fi
 # Launcher owns its own new evidence directory; outer inventory remains preserved.
 SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_PREFLIGHT_HEADLESS=1 bash "$MENU"
