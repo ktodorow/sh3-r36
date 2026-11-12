@@ -1,0 +1,43 @@
+{
+  "checkpoint-ui": {
+    "description": "Room210 fixed checkpoint: fog, inventory snapshot, unavailable-map response, flashlight toggle and fades",
+    "seed": true,
+    "seconds": 145,
+    "capture_every": 60,
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,65:I+0.5,85:Escape+0.5,100:M+0.5,115:Escape+0.5,125:L+0.5",
+    "peek": "72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660",
+    "stages": [
+      {"after_seconds": 50, "before_seconds": 65, "inspect": "stationary checkpoint, default camera, fog"},
+      {"after_seconds": 70, "before_seconds": 85, "inspect": "inventory text, icons and tinted scene snapshot"},
+      {"after_seconds": 90, "before_seconds": 100, "inspect": "return fade and restored scene"},
+      {"after_seconds": 105, "before_seconds": 115, "inspect": "map request; checkpoint has no acquired map"},
+      {"after_seconds": 130, "before_seconds": 145, "inspect": "flashlight toggle response, same position"}
+    ]
+  },
+  "indoor-ui": {
+    "description": "Fixed indoor checkpoint: flashlight, shadows, inventory snapshot, acquired map and fades",
+    "seed": true,
+    "seconds": 145,
+    "capture_every": 60,
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,65:I+0.5,85:Escape+0.5,100:M+0.5,115:Escape+0.5,125:L+0.5",
+    "peek": "72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660",
+    "stages": [
+      {"after_seconds": 50, "before_seconds": 65, "inspect": "saved position/default camera, indoor light and shadow"},
+      {"after_seconds": 70, "before_seconds": 85, "inspect": "inventory text, icons and tinted scene snapshot"},
+      {"after_seconds": 90, "before_seconds": 100, "inspect": "return fade and restored scene"},
+      {"after_seconds": 105, "before_seconds": 115, "inspect": "acquired map, location marker and clipping"},
+      {"after_seconds": 130, "before_seconds": 145, "inspect": "flashlight toggle, same position"}
+    ]
+  },
+  "opening-cutscene": {
+    "description": "Fresh New Game: natural opening real-time camera sequence, no checkpoint or skip after difficulty selection",
+    "seed": false,
+    "seconds": 240,
+    "capture_every": 15,
+    "keys": "10:Return+0.4,30:Return+0.4,32:Return+0.4,34:Return+0.4",
+    "peek": "72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660",
+    "stages": [
+      {"after_seconds": 38, "before_seconds": 240, "inspect": "natural opening sequence: camera motion, Heather face/hair alpha, fades, then interactive park"}
+    ]
+  }
+}

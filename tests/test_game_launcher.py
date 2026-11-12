@@ -1,5 +1,6 @@
 """Actual owner game through launcher in ARM64 Docker; never hardware acceptance."""
 import os
+import json
 from pathlib import Path
 import re
 import shutil
@@ -77,6 +78,13 @@ class GameLauncherTests(LauncherFixture):
             env["SH3_SEED_SESSION"] = os.environ["SH3_REFERENCE_SEED"]
             env["SH3_KEYS"] = "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,75:S+4"
             env["SH3_PEEK"] = "72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660"
+        if os.environ.get("SH3_REFERENCE_SCENE"):
+            plan = json.loads((REPO / "scripts/scenes.json").read_text())[os.environ["SH3_REFERENCE_SCENE"]]
+            seconds = plan["seconds"]
+            checkpoint = True
+            env.pop("SH3_PRESENT_DUMP", None)
+            env.update(SH3_KEYS=plan["keys"], SH3_QUIT_AFTER=str(seconds),
+                       SH3_SHOT_EVERY=str(plan["capture_every"]), SH3_PEEK=plan["peek"])
         with (out / "stdout.txt").open("w") as stdout, (out / "stderr.txt").open("w") as stderr:
             result = subprocess.run(["timeout", "--kill-after=3s", f"{seconds + 6}s", "bash",
                                      str(REPO / "ports/Silent Hill 3.sh")],
@@ -102,6 +110,12 @@ class GameLauncherTests(LauncherFixture):
         self.assertEqual(len(header[3]), 640 * 480 * 3)
         self.assertGreater(len(set(header[3])), 32, "presented image lacks game content")
         self.assertGreater(len(sequence), 10, "sequence stops after startup frames")
+        captured = re.findall(r"capture frame (\d+) ticks (\d+) output (\d+)x(\d+) backbuffer (\d+)x(\d+)", logs)
+        self.assertEqual({int(row[0]) for row in captured},
+                         {int(path.stem.removeprefix("frame")) for path in sequence},
+                         "every scene image needs time and dimensions for matched comparisons")
+        self.assertTrue(all(row[2:] == ("640", "480", "640", "480") for row in captured))
+        self.assertEqual([int(row[1]) for row in captured], sorted(int(row[1]) for row in captured))
         last = sequence[-1].read_bytes()
         prefix = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", last)
         self.assertIsNotNone(prefix)

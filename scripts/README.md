@@ -186,6 +186,23 @@ images against device capture and physical observations; timing alone cannot
 establish matched interactive state. These references never pass hardware
 acceptance by themselves.
 
+Task #6 shared plans live in `scripts/scenes.json`. Desktop:
+`python3 scripts/host/test-runtime.py --scene checkpoint-ui --seed-session <session>`.
+R36S: `python3 scripts/host/r36s.py game --scene checkpoint-ui --seed-session <session> --reviewed-helpers r36s-dumps/sh3/<reviewed-run>`.
+Explicit source seed copies only data.001/data.sys, optional disp.ini/key.ini and
+sh3-progs.bin into run payload; original assets never uploaded. Omitting program
+cache produces cold application-cache replay; seed from completed replay includes
+warm cache. Host records plan/runtime/seed hashes and verifies source unchanged;
+device records plan, source checksums and after-run checks. Capture receipts log
+frame, SDL ticks, drawable and backbuffer size. Match scene and camera visually;
+different frame rates mean equal frame numbers do not mean equal scene times.
+Watchdog follows declared duration plus45 seconds; forced timeout remains failure.
+`indoor-ui` uses same keys for later checkpoints with map/light. Use
+`--scene opening-cutscene` without seed for fresh New Game, difficulty selection
+then natural real-time opening sequence; device ignores latest-save fallback.
+Opening uses15-frame capture interval for brief hair/camera shots. Other plans
+use60; all capture runs are visual evidence, not low-overhead FPS acceptance.
+
 ## Launcher tests
 
 `python3 -m unittest discover -s tests -v` runs interpreted host fixtures through

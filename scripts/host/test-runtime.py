@@ -3,11 +3,13 @@
 from datetime import datetime, timezone
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import subprocess
 import sys
 
 from r36s import ROOT, check_ignores, config
+from scenes import SCENES, scene_identity, seed_hashes
 
 
 check_ignores()
@@ -15,7 +17,10 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--game", action="store_true", help="Include actual owner-game desktop comparison")
 parser.add_argument("--checkpoint", action="store_true", help="Include 100-second desktop opening-scene reference")
 parser.add_argument("--seed-session", type=Path, help="Replay collected checkpoint in 100-second reference")
+parser.add_argument("--scene", choices=SCENES, help="Replay named scene plan; images still require visual review")
 args = parser.parse_args()
+if args.scene and SCENES[args.scene]["seed"] and not args.seed_session:
+    parser.error("Selected scene requires --seed-session")
 if args.seed_session:
     args.seed_session = args.seed_session.resolve()
     for name in ("data.001", "data.sys"):
@@ -26,18 +31,24 @@ recipe = hashlib.sha256((ROOT / "scripts/build/Dockerfile").read_bytes()).hexdig
 image = "sh3-r36s-build:" + recipe[:16]
 out = ROOT / ".port-cache" / "runtime-tests" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 out.mkdir(parents=True)
+identity = scene_identity(args.scene, args.seed_session) if args.scene else None
+if identity:
+    (out / "scene-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+    (out / "scene-plan.json").write_text(json.dumps(identity["plan"], indent=2) + "\n")
 argv = ["docker", "run", "--rm", "--platform", "linux/arm64"]
 for folder in ["tests", "ports", "scripts", "dist"]:
     argv += ["--mount", f"type=bind,src={ROOT / folder},dst=/work/{folder},readonly"]
 argv += ["--mount", f"type=bind,src={out},dst=/evidence",
          "-e", "SH3_REFERENCE_OUT=/evidence/desktop-reference"]
-if args.game or args.checkpoint:
+if args.game or args.checkpoint or args.scene:
     cfg = config()
     game = Path(cfg.get("SH3_GAME_DIR") or ROOT / "SILENT HILL 3").expanduser().resolve()
     argv += ["--mount", f"type=bind,src={game},dst=/owner,readonly",
              "-e", "SH3_GAME_DATA=/owner", "-e", "SH3_GAME_REFERENCE_OUT=/evidence/game-reference"]
 if args.checkpoint:
     argv += ["-e", "SH3_REFERENCE_SECONDS=100"]
+if args.scene:
+    argv += ["-e", "SH3_REFERENCE_SCENE=" + args.scene]
 if args.seed_session:
     argv += ["--mount", f"type=bind,src={args.seed_session},dst=/seed,readonly",
              "-e", "SH3_REFERENCE_SEED=/seed"]
@@ -45,6 +56,11 @@ argv += ["-e", "SH3_RUNTIME_BINARY=/work/dist/runtime/sh3", "-e", "PYTHONDONTWRI
          image, "python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
 with (out / "stdout.txt").open("w") as stdout, (out / "stderr.txt").open("w") as stderr:
     status = subprocess.run(argv, stdout=stdout, stderr=stderr).returncode
+if identity:
+    identity["source_preserved"] = not args.seed_session or seed_hashes(args.seed_session) == identity["seed_sha256"]
+    (out / "scene-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+    if not identity["source_preserved"]:
+        status = 3
 (out / "exit-status.txt").write_text(str(status) + "\n")
 print((out / "stderr.txt").read_text(), end="")
 print("Evidence:", out.relative_to(ROOT))

@@ -18,6 +18,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 FILES = ["scripts/device/inventory.sh", "scripts/device/run.sh",
          "scripts/device/check-data.sh", "scripts/device/runtime.sh", "scripts/required-data.txt",
+         "scripts/scenes.json",
          "scripts/device/monitor-game.sh",
          "ports/Silent Hill 3.sh", "ports/Silent Hill 3 Runtime Diagnostics.sh",
          "ports/Silent Hill 3 Graphics Diagnostics.sh", "ports/Silent Hill 3 Game.sh",
@@ -47,14 +48,29 @@ def check_ignores():
 
 
 def main():
+    from scenes import SCENES, scene_identity, seed_hashes
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["inventory", "preflight", "runtime", "gles", "game"])
     parser.add_argument("--reviewed-helpers", type=Path,
                         help="Prior collected inventory directory whose helpers were reviewed")
     parser.add_argument("--hash-data", action="store_true", help="Record complete asset SHA-256 identities during preflight")
+    parser.add_argument("--scene", choices=SCENES, help="Replay shared desktop/device scene plan")
+    parser.add_argument("--seed-session", type=Path, help="Copy explicit checkpoint into isolated scene session")
     args = parser.parse_args()
     if args.hash_data and args.action != "preflight":
         parser.error("--hash-data requires preflight action")
+    if (args.scene or args.seed_session) and args.action != "game":
+        parser.error("Scene replay requires game action")
+    if args.seed_session and not args.scene:
+        parser.error("--seed-session requires --scene")
+    if args.scene and SCENES[args.scene]["seed"] and not args.seed_session:
+        parser.error("Selected scene requires --seed-session")
+    if args.seed_session:
+        args.seed_session = args.seed_session.resolve()
+        for name in ("savedata/data.001", "savedata/data.sys"):
+            if not (args.seed_session / name).is_file():
+                parser.error("Missing collected checkpoint files")
     check_ignores()
     cfg = config()
     port = cfg.get("R36S_PORT", "")
@@ -88,6 +104,9 @@ def main():
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ-") + uuid.uuid4().hex[:6]
     out = ROOT / "r36s-dumps" / port / run_id
     out.mkdir(parents=True)
+    scene = scene_identity(args.scene, args.seed_session) if args.scene else None
+    if scene:
+        (out / "scene-identity.json").write_text(json.dumps(scene, indent=2) + "\n")
     remote = f"/roms2/ports/{port}/runs/{run_id}"
     remote_payload = remote + "/payload"
     statuses = {"run_id": run_id, "action": args.action, "execution": "not-attempted",
@@ -136,7 +155,7 @@ def main():
         return command(name, ["ssh", *options, "-p", tcp, host, script], timeout)
 
     identity = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in FILES}
-    for name in ["scripts/host/r36s.py", "scripts/host/ssh-askpass.sh"]:
+    for name in ["scripts/host/r36s.py", "scripts/host/ssh-askpass.sh", "scripts/host/scenes.py"]:
         identity[name] = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     save("source-identity.json", json.dumps({"base_commit": commit, "files": identity}, indent=2) + "\n")
@@ -164,6 +183,13 @@ def main():
                 (payload / "reviewed-helpers.sha256").write_bytes(review)
             if args.hash_data:
                 (payload / "hash-data").touch()
+            if scene:
+                (payload / "scene-plan.json").write_text(json.dumps(scene["plan"], indent=2) + "\n")
+                if args.seed_session:
+                    for name in scene["seed_sha256"]:
+                        dest = payload / "scene-seed" / name
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_bytes((args.seed_session / name).read_bytes())
             code = ssh("prepare", "mkdir -p " + shlex.quote(f"/roms2/ports/{port}/runs") +
                        " && mkdir " + shlex.quote(remote))
             if code == 0:
@@ -173,6 +199,8 @@ def main():
                 script = shlex.join(["bash", remote_payload + "/scripts/device/run.sh",
                                      args.action, f"/roms2/ports/{port}", run_id, remote_payload])
                 execution_limit = 600 if args.hash_data else 180 if args.action == "game" else 120
+                if scene:
+                    execution_limit = scene["plan"]["seconds"] + 100
                 statuses["execution"] = ssh("execute", script, timeout=execution_limit)
             else:
                 statuses["execution"] = "deployment-failed"
@@ -189,13 +217,18 @@ def main():
             statuses["service-collection"] = command(
                 "collect-service", ["scp", *options, "-P", tcp, "-r",
                                     host + ":" + remote + "-launch-service/", str(out / "service")], timeout=120)
+        if scene:
+            scene["source_preserved"] = not args.seed_session or seed_hashes(args.seed_session) == scene["seed_sha256"]
+            (out / "scene-identity.json").write_text(json.dumps(scene, indent=2) + "\n")
+            statuses["source-preserved"] = scene["source_preserved"]
         save("status.json", json.dumps(statuses, indent=2) + "\n")
     print("Evidence:", out.relative_to(ROOT))
     print("Local data:", statuses["local-data"], "Execution:", statuses["execution"],
           "Collection:", statuses["collection"])
     return 0 if (statuses["execution"] == 0 and statuses["collection"] == 0 and
                  statuses.get("launcher-collection", 0) == 0 and
-                 statuses.get("service-collection", 0) == 0) else 1
+                 statuses.get("service-collection", 0) == 0 and
+                 statuses.get("source-preserved", True)) else 1
 
 
 if __name__ == "__main__":

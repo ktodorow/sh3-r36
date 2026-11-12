@@ -58,20 +58,30 @@ if [ "$MODE" = game ]; then
             source_launch=$candidate
         fi
     done
-    if [ -n "$source_launch" ]; then
+    # Explicit unseeded scene starts fresh instead of inheriting latest owner save.
+    if [ -f "$PAYLOAD/scene-plan.json" ] && [ ! -d "$PAYLOAD/scene-seed" ]; then
+        source_launch=''
+    fi
+    source_session=${source_launch:+$source_launch/session}
+    if [ -d "$PAYLOAD/scene-seed" ]; then
+        source_session="$PAYLOAD/scene-seed"
+        source_launch=deployed-scene-seed
+    fi
+    if [ -n "$source_session" ]; then
         export SH3_SEED_SESSION="$RUN_DIR/checkpoint-seed"
         mkdir -p "$SH3_SEED_SESSION/savedata"
         : > "$RUN_DIR/checkpoint-source.sha256"
         cache=cold
         for name in savedata/data.001 savedata/data.sys savedata/disp.ini savedata/key.ini; do
-            if [ -f "$source_launch/session/$name" ]; then
-                sha256sum "$source_launch/session/$name" >> "$RUN_DIR/checkpoint-source.sha256"
-                cp -p "$source_launch/session/$name" "$SH3_SEED_SESSION/$name"
+            if [ -f "$source_session/$name" ]; then
+                sha256sum "$source_session/$name" >> "$RUN_DIR/checkpoint-source.sha256"
+                cp -p "$source_session/$name" "$SH3_SEED_SESSION/$name"
             fi
         done
-        if [ -f "$source_launch/checkpoint-replay.txt" ] && [ -f "$source_launch/session/sh3-progs.bin" ]; then
-            sha256sum "$source_launch/session/sh3-progs.bin" >> "$RUN_DIR/checkpoint-source.sha256"
-            cp -p "$source_launch/session/sh3-progs.bin" "$SH3_SEED_SESSION/sh3-progs.bin"
+        if { [ -d "$PAYLOAD/scene-seed" ] || [ -f "$source_launch/checkpoint-replay.txt" ]; } &&
+            [ -f "$source_session/sh3-progs.bin" ]; then
+            sha256sum "$source_session/sh3-progs.bin" >> "$RUN_DIR/checkpoint-source.sha256"
+            cp -p "$source_session/sh3-progs.bin" "$SH3_SEED_SESSION/sh3-progs.bin"
             cache=warm
         fi
         printf 'source_launch=%s\nprogram_cache=%s\ninternal_resolution=640x480\n' \
@@ -79,13 +89,29 @@ if [ "$MODE" = game ]; then
         export SH3_KEYS='10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,75:S+4'
     fi
     export SH3_STATS=1 SH3_GL_BACKEND=gles SH3_SHOW=1 SH3_QUIT_AFTER=100 SH3_MONITOR=1
-    printf 'keys=%s\nquit_after_seconds=%s\ncapture_every_frames=60\ncontinuous_capture=0\n' \
-        "$SH3_KEYS" "$SH3_QUIT_AFTER" > "$RUN_DIR/game-probe.txt"
+    export SH3_SHOT_EVERY=60
+    if [ -f "$PAYLOAD/scene-plan.json" ]; then
+        cp "$PAYLOAD/scene-plan.json" "$RUN_DIR/scene-plan.json"
+        python3 - "$RUN_DIR/scene-plan.json" > "$RUN_DIR/scene-values.txt" <<'PY'
+import json, sys
+plan = json.load(open(sys.argv[1]))
+for key in ("keys", "seconds", "capture_every", "peek"):
+    value = str(plan[key])
+    if "\n" in value or "\r" in value:
+        raise ValueError("Invalid scene value")
+    print(value)
+PY
+        mapfile -t scene_values < "$RUN_DIR/scene-values.txt"
+        export SH3_KEYS="${scene_values[0]}" SH3_QUIT_AFTER="${scene_values[1]}"
+        export SH3_SHOT_EVERY="${scene_values[2]}" SH3_PEEK="${scene_values[3]}"
+    fi
+    printf 'keys=%s\nquit_after_seconds=%s\ncapture_every_frames=%s\ncontinuous_capture=0\n' \
+        "$SH3_KEYS" "$SH3_QUIT_AFTER" "$SH3_SHOT_EVERY" > "$RUN_DIR/game-probe.txt"
     # Sparse evidence, avoiding full framebuffer readback and SD write every frame.
     unset SH3_PRESENT_DUMP
-    export SH3_SHOT="$PORT_ROOT/runs/${RUN_ID}-launch/shots" SH3_SHOT_EVERY=60
+    export SH3_SHOT="$PORT_ROOT/runs/${RUN_ID}-launch/shots"
     status=0
-    timeout --kill-after=5s 145s env SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_SERVICE_WAIT=1 \
+    timeout --kill-after=5s "$((SH3_QUIT_AFTER + 45))s" env SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_SERVICE_WAIT=1 \
         SH3_PREFLIGHT_HEADLESS=1 bash "$MENU" || status=$?
     if [ -n "$source_launch" ]; then
         sha256sum -c "$RUN_DIR/checkpoint-source.sha256" > "$RUN_DIR/checkpoint-source-after.txt" || status=3

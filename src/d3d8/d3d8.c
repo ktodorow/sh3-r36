@@ -351,6 +351,8 @@ METHOD(dev_Present, 5) {
         char path[512];
         snprintf(path, sizeof path, "%s/frame%05d.ppm", shot, frame);
         capture_present(path, ww, wh);
+        rt_log("capture frame %d ticks %llu output %dx%d backbuffer %dx%d", frame,
+               (unsigned long long)SDL_GetTicks64(), ww, wh, bb->w, bb->h);
     }
     frame++;
     const char *present_dump = getenv("SH3_PRESENT_DUMP");
