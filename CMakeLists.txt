@@ -10,6 +10,10 @@ file(GLOB RT CONFIGURE_DEPENDS src/runtime/*.c src/win32/*.c src/d3d8/*.c src/ga
 
 add_executable(sh3 ${GEN} ${RT})
 target_include_directories(sh3 PRIVATE src/recomp/gen)
+if(SH3_GLES_SAMPLES)
+  target_include_directories(sh3 PRIVATE ${CMAKE_BINARY_DIR}/generated)
+  target_compile_definitions(sh3 PRIVATE SH3_GLES_SAMPLES=1)
+endif()
 # Lifted code relies on wrapping arithmetic and type punning through guest memory.
 target_compile_options(sh3 PRIVATE -fwrapv -fno-strict-aliasing)
 set_source_files_properties(${GEN} PROPERTIES COMPILE_OPTIONS "-w")

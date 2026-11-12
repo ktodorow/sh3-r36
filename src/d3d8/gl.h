@@ -25,6 +25,7 @@
     X(__typeof__(&glGenTextures), glGenTextures) \
     X(__typeof__(&glGetString), glGetString) \
     X(__typeof__(&glGetIntegerv), glGetIntegerv) \
+    X(__typeof__(&glGetError), glGetError) \
     X(PFNGLGETSTRINGIPROC, glGetStringi) \
     X(__typeof__(&glPixelStorei), glPixelStorei) \
     X(__typeof__(&glPolygonMode), glPolygonMode) \
@@ -116,6 +117,7 @@ GL_FUNCS(GL_DECLARE)
 #define glGenTextures p_glGenTextures
 #define glGetString p_glGetString
 #define glGetIntegerv p_glGetIntegerv
+#define glGetError p_glGetError
 #define glGetStringi p_glGetStringi
 #define glPixelStorei p_glPixelStorei
 #define glPolygonMode p_glPolygonMode
@@ -186,3 +188,6 @@ GL_FUNCS(GL_DECLARE)
 #endif
 
 void gl_load(void);
+extern int gl_es, gl_clip_emulated;
+int gl_has_extension(const char *name);
+void gl_prepare_context(void);

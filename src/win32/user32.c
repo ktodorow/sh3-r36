@@ -3,6 +3,8 @@
 #include <SDL2/SDL.h>
 #include <ctype.h>
 
+extern void gl_prepare_context(void);
+
 /* ---- printf family: format string and arguments live in guest memory ---- */
 
 int rt_format(char *out, size_t n, const char *fmt, uint32_t args) {
@@ -83,6 +85,7 @@ void rt_window_open(void) {
         SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");  /* let SIGTERM/SIGINT stop the port */
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_TIMER))
             rt_fatal("SDL_Init: %s", SDL_GetError());
+        gl_prepare_context();
         /* A scripted run (SH3_KEYS) stays off screen, unless SH3_SHOW is set to watch it: either way it
          * never reads the real keyboard. */
         rt_window = SDL_CreateWindow("Silent Hill 3", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,

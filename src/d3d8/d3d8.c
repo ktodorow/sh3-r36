@@ -131,6 +131,13 @@ static void device_reset(uint32_t pp);
 void gl_context_open(void) {
     static SDL_GLContext ctx;
     if (ctx) return;
+    ctx = SDL_GL_GetCurrentContext();
+    int profile = 0;
+    SDL_GL_GetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, &profile);
+    if (!ctx && profile == SDL_GL_CONTEXT_PROFILE_ES) {
+        ctx = SDL_GL_CreateContext(rt_window);
+        if (!ctx) rt_fatal("no requested native GLES context: %s", SDL_GetError());
+    }
     /* 4.5 core has glClipControl; older contexts are tried so the log says what the driver offers. */
     static const int versions[][2] = {{4, 6}, {4, 5}, {4, 3}};
     for (int i = 0; i < 3 && !ctx; i++) {
@@ -152,12 +159,6 @@ METHOD(d3d_CreateDevice, 7) {
     if (!dev) {
         gl_context_open();
         rt_log("GL: %s / %s", glGetString(GL_RENDERER), glGetString(GL_VERSION));
-        GLint n_ext = 0, clip_control = 0;
-        glGetIntegerv(GL_NUM_EXTENSIONS, &n_ext);
-        for (GLint i = 0; i < n_ext; i++)
-            if (!strcmp((const char *)glGetStringi(GL_EXTENSIONS, i), "GL_ARB_clip_control")) clip_control = 1;
-        if (!clip_control) rt_log("GL: no ARB_clip_control, the image will be upside down");
-        glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE);  /* D3D's y-down rows and [0,1] depth */
         dev = calloc(1, sizeof *dev);
         dev->obj = com_new(device_vtable(), 16);
         res_init_vtables();
@@ -301,6 +302,26 @@ METHOD(dev_SetCursorPosition, 4) { return 0; }
 METHOD(dev_ShowCursor, 2) { return 0; }
 METHOD(dev_Reset, 2) { device_reset(ARG(1)); return 0; }
 
+/* Optional capture of actual window backbuffer, after presentation blit and
+ * before swap. RGBA readback is required by ES; PPM rows use visible top-left. */
+static void capture_present(const char *path, int w, int h) {
+    uint8_t *px = malloc((size_t)w * h * 4);
+    if (!px) rt_fatal("presentation capture allocation failed");
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    FILE *file = fopen(path, "wb");
+    if (!file) rt_fatal("cannot record presentation capture");
+    fprintf(file, "P6\n%d %d\n255\n", w, h);
+    for (int y = h - 1; y >= 0; y--)
+        for (int x = 0; x < w; x++) fwrite(px + ((size_t)y * w + x) * 4, 1, 3, file);
+    int failed = ferror(file);
+    failed |= fclose(file) != 0;
+    free(px);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, dev->fbo);
+    if (failed) rt_fatal("cannot finish presentation capture");
+}
+
 METHOD(dev_Present, 5) {
     int ww, wh;
     SDL_GL_GetDrawableSize(rt_window, &ww, &wh);
@@ -330,6 +351,8 @@ METHOD(dev_Present, 5) {
         if (f) { fprintf(f, "P6 %u %u 255\n", bb->w, bb->h); fwrite(px, 3, bb->w * bb->h, f); fclose(f); }
         free(px);
     }
+    const char *present_dump = getenv("SH3_PRESENT_DUMP");
+    if (present_dump) capture_present(present_dump, ww, wh);
     SDL_GL_SwapWindow(rt_window);
     static Uint64 stat_t0;
     static int stat_frames;
@@ -653,7 +676,7 @@ static void apply_render_states(void) {
     if (rs[22] == 1) glDisable(GL_CULL_FACE);
     else {
         glEnable(GL_CULL_FACE);
-        glFrontFace(GL_CW);
+        glFrontFace(gl_clip_emulated ? GL_CCW : GL_CW);
         glCullFace(rs[22] == 2 ? GL_FRONT : GL_BACK);  /* CULL_CW drops clockwise (front) faces */
     }
     if (rs[52] && dev->ds) {
@@ -664,7 +687,8 @@ static void apply_render_states(void) {
     } else glDisable(GL_STENCIL_TEST);
     uint32_t cw = rs[168];
     glColorMask(cw & 1, (cw >> 1) & 1, (cw >> 2) & 1, (cw >> 3) & 1);
-    glPolygonMode(GL_FRONT_AND_BACK, rs[8] == 1 ? GL_POINT : rs[8] == 2 ? GL_LINE : GL_FILL);
+    if (!gl_es) glPolygonMode(GL_FRONT_AND_BACK, rs[8] == 1 ? GL_POINT : rs[8] == 2 ? GL_LINE : GL_FILL);
+    else if (rs[8] != 3) rt_fatal("GLES unsupported required fill mode %u", rs[8]);
     if (rs[47]) { glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(0, -(float)rs[47]); }  /* ZBIAS */
     else glDisable(GL_POLYGON_OFFSET_FILL);
 }
@@ -689,7 +713,7 @@ static void attrib(int loc, int type, GLsizei stride, uintptr_t off) {
     glEnableVertexAttribArray(loc);
     switch (type) {
     case 0: case 1: case 2: case 3: glVertexAttribPointer(loc, type + 1, GL_FLOAT, 0, stride, (void *)off); break;
-    case 4: glVertexAttribPointer(loc, GL_BGRA, GL_UNSIGNED_BYTE, 1, stride, (void *)off); break;  /* D3DCOLOR */
+    case 4: glVertexAttribPointer(loc, gl_es ? 4 : GL_BGRA, GL_UNSIGNED_BYTE, 1, stride, (void *)off); break;  /* D3DCOLOR */
     case 5: glVertexAttribPointer(loc, 4, GL_UNSIGNED_BYTE, 0, stride, (void *)off); break;        /* UBYTE4 */
     case 6: glVertexAttribPointer(loc, 2, GL_SHORT, 0, stride, (void *)off); break;
     case 7: glVertexAttribPointer(loc, 4, GL_SHORT, 0, stride, (void *)off); break;
@@ -756,7 +780,7 @@ static void draw_setup(const uintptr_t *base, const GLuint *bufs, uint32_t up_st
     int rhw = setup_attribs(base, bufs, up_stride, present);
     /* Screen-space vertices are never clipped by depth in D3D; UI quads sit at z = 0 or 1 exactly,
      * which nouveau's rounding pushes just outside the clip volume. */
-    if (rhw) glEnable(GL_DEPTH_CLAMP); else glDisable(GL_DEPTH_CLAMP);
+    if (!gl_es) { if (rhw) glEnable(GL_DEPTH_CLAMP); else glDisable(GL_DEPTH_CLAMP); }
     shader_bind_for_draw(rhw, dev->vs, present);
 }
 

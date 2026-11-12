@@ -16,8 +16,9 @@ else
     find src/recomp/gen -type f -print0 | sort -z | xargs -0 sha256sum > build/generated.sha256
     printf '%s\n' "$SH3_GENERATION_KEY" > build/generation-key.txt
 fi
+"$SH3_PYTHON" scripts/build/shader-samples.py "$SH3_EXE" build/arm64/generated/shader_samples.h
 cmake -S . -B build/arm64 -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-    -DNINTENDO_SWITCH=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DNINTENDO_SWITCH=OFF -DSH3_GLES_SAMPLES=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DCMAKE_C_FLAGS='-mcpu=cortex-a35 -ffile-prefix-map=/work=.'
 cmake --build build/arm64 --parallel "${SH3_BUILD_JOBS:-2}"
 objcopy --only-keep-debug build/arm64/sh3 dist/runtime/sh3.debug

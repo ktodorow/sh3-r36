@@ -507,6 +507,14 @@ int main(int argc, char **argv) {
         else socketExit();
     }
 #else
+    if (argc == 2 && !strcmp(argv[1], "--gles-diagnostics")) {
+        extern int rt_gles_diagnostics(void);
+        host_crash_handlers(on_crash);
+        arena_init();
+        recomp_dispatch_init();
+        rt_thread_init_main(1u << 20);
+        return rt_gles_diagnostics();
+    }
     if (argc == 2 && !strcmp(argv[1], "--runtime-diagnostics")) {
         extern int rt_runtime_diagnostics(void);
         return rt_runtime_diagnostics();

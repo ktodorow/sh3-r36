@@ -17,6 +17,8 @@ out.mkdir(parents=True)
 argv = ["docker", "run", "--rm", "--platform", "linux/arm64"]
 for folder in ["tests", "ports", "scripts", "dist"]:
     argv += ["--mount", f"type=bind,src={ROOT / folder},dst=/work/{folder},readonly"]
+argv += ["--mount", f"type=bind,src={out},dst=/evidence",
+         "-e", "SH3_REFERENCE_OUT=/evidence/desktop-reference"]
 argv += ["-e", "SH3_RUNTIME_BINARY=/work/dist/runtime/sh3", "-e", "PYTHONDONTWRITEBYTECODE=1",
          image, "python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
 with (out / "stdout.txt").open("w") as stdout, (out / "stderr.txt").open("w") as stderr:

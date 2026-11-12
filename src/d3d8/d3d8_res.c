@@ -174,7 +174,11 @@ static void gl_ensure(Res *t) {
     glBindTexture(target, t->tex);
     uint32_t levels = t->kind == RES_SURFACE ? 1 : t->levels;
     glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, levels - 1);
-    glTexParameteriv(target, GL_TEXTURE_SWIZZLE_RGBA, f->swz);
+    if (gl_es) {
+        const GLenum component[] = {GL_TEXTURE_SWIZZLE_R, GL_TEXTURE_SWIZZLE_G,
+                                    GL_TEXTURE_SWIZZLE_B, GL_TEXTURE_SWIZZLE_A};
+        for (int i = 0; i < 4; i++) glTexParameteri(target, component[i], f->swz[i]);
+    } else glTexParameteriv(target, GL_TEXTURE_SWIZZLE_RGBA, f->swz);
     for (int face = 0; face < (t->kind == RES_CUBE ? 6 : 1); face++)
         for (uint32_t l = 0; l < levels; l++) {
             uint32_t w = t->w >> l ? t->w >> l : 1, h = t->h >> l ? t->h >> l : 1, pitch, size;
@@ -184,7 +188,8 @@ static void gl_ensure(Res *t) {
             else if (f->block) {
                 level_size(f, w, h, &pitch, &size);
                 glCompressedTexImage2D(face_target(t, face), l, f->ifmt, w, h, 0, size, NULL);
-            } else glTexImage2D(face_target(t, face), l, f->ifmt, w, h, 0, f->gfmt, f->type, NULL);
+            } else glTexImage2D(face_target(t, face), l, f->ifmt, w, h, 0,
+                                gl_es && t->is_rt ? GL_RGBA : f->gfmt, f->type, NULL);
         }
 }
 

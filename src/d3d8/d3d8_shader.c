@@ -215,10 +215,14 @@ static void parse_decl(VShader *v, uint32_t decl) {
     }
 }
 
-static char *translate_vs(uint32_t func) {
+static char *translate_vs(uint32_t func, const VsInput *in) {
     Str b = {0};
     sp(&b, "uniform vec4 c[96];\nint a0 = 0;\n");
-    for (int i = 0; i < 16; i++) sp(&b, "layout(location = %d) in vec4 v%d;\n", i, i);
+    for (int i = 0; i < 16; i++) {
+        if (gl_es && in[i].stream >= 0 && in[i].type == 4)
+            sp(&b, "layout(location = %d) in vec4 raw_v%d;\n#define v%d raw_v%d.bgra\n", i, i, i, i);
+        else sp(&b, "layout(location = %d) in vec4 v%d;\n", i, i);
+    }
     sp(&b, "%s", glsl_helpers);
     sp(&b, "void vs_main(out vec4 oPos, out vec4 oD0, out vec4 oD1, out vec4 oT0, out vec4 oT1, out vec4 oT2,"
            " out vec4 oT3, out vec4 oT4, out vec4 oT5, out vec4 oT6, out vec4 oT7, out float oFog, out float oPts) {\n");
@@ -247,7 +251,7 @@ uint32_t shader_create_vs(uint32_t decl, uint32_t func) {
             v->used = 1;
             parse_decl(v, decl);
             v->has_func = func != 0;
-            if (func) v->glsl = translate_vs(func);
+            if (func) v->glsl = translate_vs(func, v->in);
             v->hash = func ? glsl_hash(v->glsl) : 0;
             progcache_shader_created();
             return VS_BASE + i;
@@ -356,7 +360,9 @@ static void ffp_vs(Str *b, const Key *k) {
     sp(b, "void vs_main(out vec4 oPos, out vec4 oD0, out vec4 oD1, out vec4 oT0, out vec4 oT1, out vec4 oT2,"
           " out vec4 oT3, out vec4 oT4, out vec4 oT5, out vec4 oT6, out vec4 oT7, out float oFog, out float oPts) {\n");
     sp(b, "  vec4 oT[8]; oPts = 1.0;\n");
-    sp(b, "  vec4 dif = %s, spe = %s;\n", k->diffuse ? "aDiffuse" : "vec4(1.0)", k->specular ? "aSpecular" : "vec4(0.0)");
+    sp(b, "  vec4 dif = %s, spe = %s;\n",
+       k->diffuse ? (gl_es ? "aDiffuse.bgra" : "aDiffuse") : "vec4(1.0)",
+       k->specular ? (gl_es ? "aSpecular.bgra" : "aSpecular") : "vec4(0.0)");
     if (k->rhw) {
         /* Screen-space vertices: undo the viewport so GL's viewport puts them back. */
         sp(b, "  float w = aPos.w == 0.0 ? 1.0 : 1.0 / aPos.w;\n"
@@ -515,7 +521,9 @@ static GLuint compile(GLenum type, const char *src) {
 
 static Prog *build(const Key *k) {
     Str v = {0}, f = {0};
-    sp(&v, "#version 430 core\n");
+    const char *header = gl_es ? "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp samplerCube;\n" : "#version 430 core\n";
+    sp(&v, "%s", header);
+    if (gl_es && k->rhw) sp(&v, "out float vRhwDepth;\n");
     if (k->ffp_vs) ffp_vs(&v, k);
     else sp(&v, "%s", vs_of(k->vs)->glsl);
     sp(&v, "uniform vec2 uHalfPix;\nout vec4 vD0, vD1, vT0, vT1, vT2, vT3, vT4, vT5, vT6, vT7;\nout float vFog, vFogZ;\n"
@@ -523,9 +531,16 @@ static Prog *build(const Key *k) {
            "  vs_main(p, vD0, vD1, vT0, vT1, vT2, vT3, vT4, vT5, vT6, vT7, fog, pts);\n"
            "  vD0 = clamp(vD0, 0.0, 1.0); vD1 = clamp(vD1, 0.0, 1.0);\n"
            "  vFog = clamp(fog, 0.0, 1.0); vFogZ = p.w;\n"
-           "  p.xy += uHalfPix * p.w;\n  gl_Position = p;\n  gl_PointSize = max(pts, 1.0);\n}\n");
+           "  p.xy += uHalfPix * p.w;\n");
+    /* ES lacks desktop depth clamp. Keep RHW primitives inside clip Z, then
+     * recover linear screen depth per fragment before clamping (not per vertex). */
+    if (gl_es && k->rhw) sp(&v, "  vRhwDepth = p.z; p.z = 0.5 * p.w;\n");
+    if (gl_clip_emulated) sp(&v, "  p.y = -p.y; p.z = 2.0 * p.z - p.w;\n");
+    sp(&v, "  gl_Position = p;\n  gl_PointSize = max(pts, 1.0);\n}\n");
 
-    sp(&f, "#version 430 core\nin vec4 vD0, vD1, vT0, vT1, vT2, vT3, vT4, vT5, vT6, vT7;\nin float vFog, vFogZ;\n"
+    sp(&f, "%s", header);
+    if (gl_es && k->rhw) sp(&f, "in float vRhwDepth;\n");
+    sp(&f, "in vec4 vD0, vD1, vT0, vT1, vT2, vT3, vT4, vT5, vT6, vT7;\nin float vFog, vFogZ;\n"
            "uniform vec4 pc[8]; uniform vec4 uTFactor, uFogColor, uFogParams; uniform float uAlphaRef;\n"
            "out vec4 fragColor;\n");
     for (int s = 0; s < 8; s++) {
@@ -550,8 +565,24 @@ static Prog *build(const Key *k) {
         if (k->alphafunc == 1) sp(&f, "  discard;\n");
         else sp(&f, "  if (!(round(c.a * 255.0) %s uAlphaRef)) discard;\n", cmp[k->alphafunc]);
     }
+    if (gl_es && k->rhw)
+        sp(&f, "  gl_FragDepth = mix(gl_DepthRange.near, gl_DepthRange.far, clamp(vRhwDepth * gl_FragCoord.w, 0.0, 1.0));\n");
     sp(&f, "  fragColor = c;\n}\n");
 
+    if (getenv("SH3_SHADER_DUMP")) {
+        static unsigned serial;
+        char path[64];
+        const char *source[] = {v.s, f.s}, *stage[] = {"vert", "frag"};
+        for (int i = 0; i < 2; i++) {
+            snprintf(path, sizeof path, "shader-%03u.%s", serial, stage[i]);
+            FILE *file = fopen(path, "w");
+            if (!file) rt_fatal("cannot record generated shader %s", path);
+            int failed = fputs(source[i], file) == EOF;
+            failed |= fclose(file) != 0;
+            if (failed) rt_fatal("cannot finish generated shader %s", path);
+        }
+        serial++;
+    }
     GLuint vs = compile(GL_VERTEX_SHADER, v.s), fs = compile(GL_FRAGMENT_SHADER, f.s);
     GLuint id = glCreateProgram();
     glAttachShader(id, vs);

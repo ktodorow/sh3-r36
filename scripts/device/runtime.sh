@@ -5,6 +5,7 @@ PORT_ROOT=$1
 RUN_ID=$2
 PAYLOAD=$3
 RUN_DIR=$4
+MODE=${5:-runtime}
 if pgrep -x sh3 >/dev/null; then echo 'Existing sh3 process present; preserved.' >&2; exit 3; fi
 if [ -e "$PORT_ROOT/runtime" ] && [ ! -f "$PORT_ROOT/runtime/.sh3-runtime-owned" ]; then
     echo 'Existing runtime not project-owned; preserved.' >&2; exit 3
@@ -30,9 +31,14 @@ while IFS= read -r library; do
     readelf -h -d -V "$library"
 done > "$RUN_DIR/runtime-closure.txt" 2> "$RUN_DIR/runtime-closure.stderr.txt"
 MENU="$(dirname "$PORT_ROOT")/Silent Hill 3 Runtime Diagnostics.sh"
-if [ -e "$MENU" ] && ! grep -q '^# SH3 project runtime diagnostics menu;' "$MENU"; then
+MARKER='# SH3 project runtime diagnostics menu;'
+if [ "$MODE" = gles ]; then
+    MENU="$(dirname "$PORT_ROOT")/Silent Hill 3 Graphics Diagnostics.sh"
+    MARKER='# SH3 project graphics diagnostics menu;'
+fi
+if [ -e "$MENU" ] && ! grep -q "^$MARKER" "$MENU"; then
     echo 'Existing runtime menu not project-owned; preserved.' >&2; exit 3
 fi
-cp "$PAYLOAD/ports/Silent Hill 3 Runtime Diagnostics.sh" "$MENU"
+cp "$PAYLOAD/ports/$(basename "$MENU")" "$MENU"
 chmod +x "$MENU"
 SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_PREFLIGHT_HEADLESS=1 bash "$MENU"

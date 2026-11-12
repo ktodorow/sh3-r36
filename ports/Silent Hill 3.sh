@@ -51,7 +51,7 @@ main() {
         echo 'PortMaster controls failed; data validation not attempted.' >&2
         exit 3
     fi
-    if [ "${SH3_MODE:-preflight}" = runtime-diagnostics ]; then
+    if [ "${SH3_MODE:-preflight}" = runtime-diagnostics ] || [ "${SH3_MODE:-}" = gles-diagnostics ]; then
         if [ ! -x "$PORT_ROOT/runtime/sh3" ]; then
             echo 'Native runtime missing; install Docker-built ARM64 diagnostics package.' >&2
             return 3
@@ -61,7 +61,7 @@ main() {
             pm_platform_helper "$PORT_ROOT/runtime/sh3"
         fi
         cd "$RUN_DIR" || return 3
-        timeout 30s "$PORT_ROOT/runtime/sh3" --runtime-diagnostics
+        timeout 30s "$PORT_ROOT/runtime/sh3" "--$SH3_MODE"
         return $?
     fi
     bash "${SH3_PACKAGE_DIR:-$PORT_ROOT/preflight}/scripts/device/check-data.sh" "$DATA_DIR" \

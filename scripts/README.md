@@ -2,7 +2,8 @@
 
 Selected personal-port folder: `/roms2/ports/sh3`, from local `R36S_PORT=sh3`.
 Menu entries: `/roms2/ports/Silent Hill 3 Preflight.sh` and
-`/roms2/ports/Silent Hill 3 Runtime Diagnostics.sh`. Preflight checks data;
+`/roms2/ports/Silent Hill 3 Runtime Diagnostics.sh`, plus
+`/roms2/ports/Silent Hill 3 Graphics Diagnostics.sh`. Preflight checks data;
 runtime diagnostics exercise native memory, threads, signals and timers without
 rendering. Workflows do not stop frontend, mount runtimes, install packages,
 change clocks or modify firmware.
@@ -95,6 +96,31 @@ labelled containers and unused labelled `sh3-r36s-build` images, without force.
 Source, generated C, owner data, `dist/`, `.port-cache/` and `r36s-dumps/` survive.
 No named volumes or dedicated builder created; shared Docker layer cache remains
 untouched. Generation/build caches inside `build/` are disposable.
+
+## GLES diagnostics (task #3)
+
+`python3 scripts/host/r36s.py gles --reviewed-helpers r36s-dumps/sh3/<inventory-run-id>`
+deploys native package, installs `/roms2/ports/Silent Hill 3 Graphics Diagnostics.sh`
+and runs GLES probe through same launcher. Uses `/roms2/ports/sh3` and firmware
+SDL/EGL/GLES providers. Opens graphics window; frontend remains running. Collects
+stdout, stderr, status, generated GLSL, provider mappings and PPM captures into
+run-owned directory. Owner-derived vertex/fragment samples, original quad,
+indexed/base-vertex, skinning, precision, culling/scissor/depth/stencil and RHW
+depth fallback must all pass before exit0/`gles=PASS`. Final quad presents for
+three seconds, then returns through normal PortMaster cleanup. No game-data
+upload required; build embeds selected private samples for personal testing.
+
+`SH3_GLES_EVIDENCE=r36s-dumps/sh3/<graphics-run-id> python3 -m unittest tests.test_gles_evidence.GraphicsEvidenceTests -v`
+checks independent pixels and actual identity/lifecycle evidence. Full resource
+matrix remains task #4; this probe does not establish gameplay or performance.
+
+`python3 scripts/host/test-runtime.py` also runs same diagnostic via launcher
+with `SH3_GL_BACKEND=desktop`, `SH3_GRAPHICS_REFERENCE=1`, SDL offscreen and Mesa
+software rendering inside ARM64 Docker. Desktop uses GLSL430, clip control and
+native depth clamp. Captures retained at `.port-cache/runtime-tests/<UTC-id>/desktop-reference/`.
+Only `desktop_reference=PASS` may result; software never passes R36S hardware
+identity. Ordinary AArch64 game context defaults native GLES; explicit
+`SH3_GL_BACKEND=desktop` retains desktop comparison route.
 
 ## Launcher tests
 

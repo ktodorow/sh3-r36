@@ -1,7 +1,7 @@
 # Native ARM64 build workflow
 
-Read before build work, environment changes or build cleanup. Task #2 targets
-Linux AArch64 diagnostics on recorded dArkOS glibc 2.41/kernel 4.4.189.
+Read before build work, environment changes or build cleanup. Native diagnostics
+target recorded dArkOS glibc 2.41/kernel 4.4.189, Linux AArch64.
 
 ## Environment and inputs
 
@@ -57,6 +57,14 @@ Image tag derives from Dockerfile SHA-256. Existing matching Linux ARM64 image
 reused. Installed package versions, compiler, Python dependencies, base commit,
 source hashes, selected input hash and generation key recorded per build.
 Generation reused only after complete generated-file manifest check.
+
+Graphics builds also extract selected shaders/declarations and original quad
+from recognized owner executable using `scripts/build/shader-samples.py`.
+Private header stays in ignored `build/arm64/generated/`; native binary embeds
+samples for personal device tests. Source generation cache remains separately
+verified. No original game data or extracted samples belong in Git or public
+artifacts. Firmware SDL/EGL/Mali remains device provider; Docker Mesa supplies
+desktop comparison only, never hardware acceptance.
 
 `python3 scripts/host/clean-build.py` clears `build/`, including generation and
 compile caches. `--docker` also removes stopped labelled containers and unused

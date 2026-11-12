@@ -28,7 +28,7 @@ bash "$PAYLOAD/scripts/device/inventory.sh" "$PORT_ROOT" "$RUN_DIR" || exit 3
 awk 'length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\// {print}' "$RUN_DIR/libraries.txt" \
     > "$RUN_DIR/firmware-libraries-before.sha256"
 if [ "$ACTION" = inventory ]; then exit 0; fi
-if [ "$ACTION" != preflight ] && [ "$ACTION" != runtime ]; then echo 'Unknown action' >&2; exit 3; fi
+if [ "$ACTION" != preflight ] && [ "$ACTION" != runtime ] && [ "$ACTION" != gles ]; then echo 'Unknown action' >&2; exit 3; fi
 if [ ! -s "$PAYLOAD/reviewed-helpers.sha256" ] || \
     ! cmp -s "$PAYLOAD/reviewed-helpers.sha256" "$RUN_DIR/portmaster-files.sha256"; then
     echo 'Installed PortMaster helpers differ from reviewed inventory; refusing to source.' >&2
@@ -50,8 +50,8 @@ cp "$PAYLOAD/ports/Silent Hill 3.sh" "$PORT_ROOT/preflight/ports/" || exit 3
 touch "$PORT_ROOT/preflight/.sh3-preflight-owned" || exit 3
 cp "$PAYLOAD/ports/Silent Hill 3.sh" "$MENU" || exit 3
 chmod +x "$MENU" || exit 3
-if [ "$ACTION" = runtime ]; then
-    bash "$PAYLOAD/scripts/device/runtime.sh" "$PORT_ROOT" "$RUN_ID" "$PAYLOAD" "$RUN_DIR"
+if [ "$ACTION" = runtime ] || [ "$ACTION" = gles ]; then
+    bash "$PAYLOAD/scripts/device/runtime.sh" "$PORT_ROOT" "$RUN_ID" "$PAYLOAD" "$RUN_DIR" "$ACTION"
     exit $?
 fi
 # Launcher owns its own new evidence directory; outer inventory remains preserved.
