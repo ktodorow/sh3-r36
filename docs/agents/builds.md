@@ -58,7 +58,8 @@ reused. Installed package versions, compiler, Python dependencies, base commit,
 source hashes, selected input hash and generation key recorded per build.
 Generation reused only after complete generated-file manifest check.
 
-Graphics builds also extract selected shaders/declarations and original quad
+Graphics builds also extract selected shaders/declarations, original quad and
+render-target dimension tables
 from recognized owner executable using `scripts/build/shader-samples.py`.
 Private header stays in ignored `build/arm64/generated/`; native binary embeds
 samples for personal device tests. Source generation cache remains separately

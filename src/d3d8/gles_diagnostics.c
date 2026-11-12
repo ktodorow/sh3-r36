@@ -1,6 +1,7 @@
 /* Installed-launcher diagnostics. Never infer hardware support from host fixtures. */
 #ifndef __SWITCH__
 #include "d3d8.h"
+#include <sys/resource.h>
 #ifdef SH3_GLES_SAMPLES
 #include "shader_samples.h"
 #endif
@@ -13,7 +14,7 @@ static uint32_t copy_guest(const void *data, size_t size) {
 
 static uint32_t method(uint32_t object, int slot, int count, const uint32_t *arguments) {
     uint32_t args[12] = {object};
-    memcpy(args + 1, arguments, count * 4);
+    if (count) memcpy(args + 1, arguments, count * 4);
     return guest_call(MEM32(MEM32(object) + slot * 4), count + 1, args, 1);
 }
 #define DEVICE(slot, ...) method(dev->obj, slot, sizeof((uint32_t[]){__VA_ARGS__}) / 4, (uint32_t[]){__VA_ARGS__})
@@ -357,6 +358,477 @@ static int presentation_sample(void) {
 #endif
 }
 
+#ifdef SH3_GLES_SAMPLES
+static int resource_capture(const char *name);
+#endif
+
+static int texture_format_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    const struct { uint32_t fmt, value; int bytes, r, g, b; const char *name; } cases[] = {
+        {FMT_A8R8G8B8,0x33e02080,4,224,32,128,"argb8.ppm"},
+        {FMT_X8R8G8B8,0x00e02080,4,224,32,128,"xrgb8.ppm"},
+        {FMT_R5G6B5,0xf800,2,255,0,0,"rgb565.ppm"},
+        {FMT_A1R5G5B5,0x83e0,2,0,255,0,"argb1555.ppm"},
+        {FMT_X1R5G5B5,0x001f,2,0,0,255,"xrgb1555.ppm"},
+        {FMT_A4R4G4B4,0x3f84,2,255,136,68,"argb4444.ppm"},
+        {FMT_X4R4G4B4,0x0f84,2,255,136,68,"xrgb4444.ppm"},
+    };
+    uint32_t saved = dev->tex[0];
+    dev->vs = 0x104;
+    dev->ps = shader_create_ps(copy_guest(sample_ps, sizeof sample_ps));
+    dev->rs[7] = dev->rs[27] = 0;
+    int ok = 1;
+    for (size_t c = 0; c < sizeof cases / sizeof *cases; c++) {
+        dev->tex[0] = res_texture(2,2,1,0,cases[c].fmt,0,0);
+        Res *t = res_of(dev->tex[0]), *s = res_of(t->surf[0][0]);
+        for (int i = 0; i < 4; i++) memcpy(GPTR(s->mem + i * cases[c].bytes), &cases[c].value, cases[c].bytes);
+        uint8_t original[16]; memcpy(original, GPTR(s->mem), s->size);
+        t->dirty = s->dirty = 1;
+        DEVICE(36,0,0,7,0xff000000,0x3f800000,0);
+        DEVICE(72,5,2,copy_guest(sample_geometry,sizeof sample_geometry),24);
+        ok &= resource_capture(cases[c].name) && pixel(32,24,cases[c].r,cases[c].g,cases[c].b);
+        int alpha = cases[c].fmt == FMT_A8R8G8B8 || cases[c].fmt == FMT_A4R4G4B4 ? 51 : 255;
+        ok &= frame[(24*64+32)*4+3] == alpha;
+        ok &= !memcmp(original, GPTR(s->mem), s->size);
+        GLenum error = glGetError();
+        printf("texture_format=%u gl_error=%04x source_preserved=%s\n", cases[c].fmt,error,
+               !memcmp(original,GPTR(s->mem),s->size) ? "yes" : "no");
+        ok &= !error;
+        res_release(t->obj);
+    }
+    dev->tex[0] = saved;
+    printf("texture_formats=%s\n",ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
+#ifdef SH3_GLES_SAMPLES
+static int resource_capture(const char *name) {
+    int ok = capture(name);
+    char path[128]; snprintf(path, sizeof path, "%s.rgba", name);
+    FILE *file = fopen(path, "wb");
+    if (!file) return 0;
+    ok &= fwrite(frame, 1, sizeof frame, file) == sizeof frame;
+    fclose(file);
+    GLenum error = glGetError();
+    printf("resource_capture=%s gl_error=%04x\n", name, error);
+    return ok && !error;
+}
+
+static int resource_draw(const char *name, float uv_scale) {
+    float quad[24]; memcpy(quad, sample_geometry, sizeof quad);
+    for (int i = 0; i < 4; i++) {
+        quad[i*6+1] *= 48.f/64.f; /* Fit game's square quad to diagnostic target. */
+        quad[i*6+4] *= uv_scale; quad[i*6+5] *= uv_scale;
+    }
+    uint32_t vertices = copy_guest(quad, sizeof quad);
+    DEVICE(36,0,0,7,0xff000000,0x3f800000,0);
+    uint32_t result = DEVICE(72,5,2,vertices,24);
+    gfree(vertices);
+    return !result && resource_capture(name);
+}
+#endif
+
+static int palette_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    uint32_t saved = dev->tex[0], saved_palette = dev->cur_palette;
+    dev->tex[0] = res_texture(2,2,1,0,FMT_P8,0,0);
+    uint32_t locked = galloc(8), palette = galloc(1024);
+    method(dev->tex[0],16,4,(uint32_t[]){0,locked,0,0});
+    memset(GPTR(MEM32(locked+4)),1,4);
+    method(dev->tex[0],17,1,(uint32_t[]){0});
+    const struct { uint32_t index, entry; const char *name; int alpha; } cases[] = {
+        {65535,0x338020e0,"palette-alpha.ppm",51},
+        {65535,0xaa40c010,"palette-update.ppm",170},
+        {65534,0x77605040,"palette-select.ppm",119},
+        {65534,0x00604020,"palette-opaque.ppm",255},
+    };
+    int ok = 1;
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        memset(GPTR(palette),0,1024); MEM32(palette+4) = cases[i].entry;
+        ok &= !DEVICE(66,cases[i].index,palette) && !DEVICE(68,cases[i].index);
+        ok &= resource_draw(cases[i].name,1);
+        ok &= frame[(24*64+32)*4+3] == cases[i].alpha;
+    }
+    Res *s = res_of(res_of(dev->tex[0])->surf[0][0]);
+    ok &= !memcmp(GPTR(s->mem),(uint8_t[]){1,1,1,1},4);
+    printf("palette_updates=%s source_preserved=%s\n",ok ? "PASS" : "FAIL",
+           !memcmp(GPTR(s->mem),(uint8_t[]){1,1,1,1},4) ? "yes" : "no");
+    res_release(dev->tex[0]); dev->tex[0] = saved; dev->cur_palette = saved_palette;
+    gfree(locked); gfree(palette);
+    return ok;
+#endif
+}
+
+static int mip_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    uint32_t saved = dev->tex[0], locked = galloc(8);
+    dev->tex[0] = res_texture(4,4,0,0,FMT_A8R8G8B8,0,0);
+    const uint32_t colors[] = {0xffff0000,0xff00ff00,0xff0000ff};
+    int ok = 1;
+    for (uint32_t level = 0; level < 3; level++) {
+        ok &= !method(dev->tex[0],16,4,(uint32_t[]){level,locked,0,0});
+        uint32_t width = 4 >> level;
+        for (uint32_t y = 0; y < width; y++) for (uint32_t x = 0; x < width; x++)
+            MEM32(MEM32(locked+4) + y*MEM32(locked) + x*4) = colors[level];
+        ok &= !method(dev->tex[0],17,1,(uint32_t[]){level});
+    }
+    dev->tss[0][18] = 1;
+    ok &= resource_draw("mip-base.ppm",1) && pixel(32,24,255,0,0);
+    ok &= resource_draw("mip-middle.ppm",32) && pixel(32,24,0,255,0);
+    ok &= resource_draw("mip-tail.ppm",64) && pixel(32,24,0,0,255);
+    ok &= !method(dev->tex[0],16,4,(uint32_t[]){1,locked,0,0});
+    for (int i = 0; i < 4; i++) MEM32(MEM32(locked+4)+i*4) = 0xffffff00;
+    ok &= !method(dev->tex[0],17,1,(uint32_t[]){1});
+    ok &= resource_draw("mip-update.ppm",32) && pixel(32,24,255,255,0);
+    dev->tss[0][18] = 0;
+    res_release(dev->tex[0]); dev->tex[0] = saved; gfree(locked);
+    printf("mip_updates=%s\n",ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
+static int dxt_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    /* Literal block examples from S3TC encoding rules, not output of our decoder.
+     * DXT3's reversed endpoints must still select four colors. */
+    const struct { uint32_t fmt; uint8_t block[16]; const char *name; int x, rgba[4]; } cases[] = {
+        {FMT_DXT1,{0,248,31,0,228,228,228,228},"dxt1.ppm",40,{170,0,85,255}},
+        {FMT_DXT1,{31,0,0,248,228,228,228,228},"dxt1-alpha.ppm",56,{0,0,0,0}},
+        {FMT_DXT3,{80,250,80,250,80,250,80,250,31,0,0,248,228,228,228,228},
+            "dxt3.ppm",56,{170,0,85,255}},
+        {FMT_DXT5,{255,0,136,142,232,136,142,232,224,7,0,0,0,0,0,0},
+            "dxt5-eight.ppm",56,{0,255,0,36}},
+        {FMT_DXT5,{0,255,190,234,171,190,234,171,224,7,0,0,0,0,0,0},
+            "dxt5-six.ppm",56,{0,255,0,204}},
+    };
+    uint32_t saved = dev->tex[0], locked = galloc(8);
+    int ok = 1;
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        dev->tex[0] = res_texture(4,4,1,0,cases[i].fmt,0,0);
+        Res *s = res_of(res_of(dev->tex[0])->surf[0][0]);
+        method(dev->tex[0],16,4,(uint32_t[]){0,locked,0,0});
+        memcpy(GPTR(MEM32(locked+4)),cases[i].block,s->size);
+        method(dev->tex[0],17,1,(uint32_t[]){0});
+        int pass = resource_draw(cases[i].name,1);
+        uint8_t *p = frame+(8*64+cases[i].x)*4;
+        /* S3TC interpolation may quantize one UNORM8 step differently by GPU. */
+        for (int c = 0; c < 4; c++) pass &= abs(p[c] - cases[i].rgba[c]) <= 1;
+        int preserved = !memcmp(GPTR(s->mem),cases[i].block,s->size);
+        printf("dxt_sample=%s result=%s source_preserved=%s\n",cases[i].name,
+               pass ? "PASS" : "FAIL",preserved ? "yes" : "no");
+        ok &= pass && preserved;
+        res_release(dev->tex[0]);
+    }
+    dev->tex[0] = saved; gfree(locked);
+    printf("dxt_variants=%s\n",ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
+static int dxt_edge_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    const uint32_t formats[] = {FMT_DXT1,FMT_DXT3,FMT_DXT5};
+    const uint16_t colors[] = {0xf800,0x07e0,0x001f,0xffe0};
+    uint32_t saved = dev->tex[0], locked = galloc(8);
+    int ok = 1;
+    for (int c = 0; c < 3; c++) {
+        dev->tex[0] = res_texture(7,5,0,0,formats[c],0,0);
+        Res *t = res_of(dev->tex[0]);
+        for (int level = 0; level < 3; level++) {
+            Res *s = res_of(t->surf[0][level]);
+            int block_size = c ? 16 : 8;
+            method(t->obj,16,4,(uint32_t[]){level,locked,0,0});
+            uint8_t *dst = GPTR(MEM32(locked+4));
+            for (uint32_t b = 0; b < s->size / block_size; b++) {
+                uint8_t *block = dst+b*block_size;
+                memset(block,0,block_size);
+                if (c == 1) memset(block,255,8);
+                if (c == 2) block[0] = 255;
+                uint16_t color = level == 0 ? colors[b] : level == 1 ? 0x001f : 0xf81f;
+                memcpy(block+(c ? 8 : 0),&color,2);
+            }
+            method(t->obj,17,1,(uint32_t[]){level});
+        }
+        char name[64];
+        snprintf(name,sizeof name,"dxt%d-tiles.ppm",c == 0 ? 1 : c == 1 ? 3 : 5);
+        ok &= resource_draw(name,1) && pixel(8,8,255,0,0) && pixel(56,8,0,255,0);
+        ok &= pixel(8,44,0,0,255) && pixel(56,44,255,255,0);
+        dev->tss[0][18] = 1;
+        snprintf(name,sizeof name,"dxt%d-tail.ppm",c == 0 ? 1 : c == 1 ? 3 : 5);
+        ok &= resource_draw(name,64) && pixel(32,24,255,0,255);
+        dev->tss[0][18] = 0;
+        uint32_t rect = copy_guest((int32_t[]){0,0,4,4},16);
+        method(t->obj,16,4,(uint32_t[]){0,locked,rect,0});
+        uint16_t cyan = 0x07ff;
+        memcpy(GPTR(MEM32(locked+4)+(c ? 8 : 0)),&cyan,2);
+        method(t->obj,17,1,(uint32_t[]){0});
+        Res *s = res_of(t->surf[0][0]); uint8_t original[64];
+        memcpy(original,GPTR(s->mem),s->size);
+        snprintf(name,sizeof name,"dxt%d-update.ppm",c == 0 ? 1 : c == 1 ? 3 : 5);
+        ok &= resource_draw(name,1) && pixel(8,8,0,255,255) && pixel(56,44,255,255,0);
+        ok &= !memcmp(original,GPTR(s->mem),s->size);
+        res_release(t->obj); gfree(rect);
+    }
+    dev->tex[0] = saved; gfree(locked);
+    printf("dxt_edges_updates=%s\n",ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
+static int framebuffer_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    uint32_t saved_rt = dev->rt, saved_ds = dev->ds;
+    res_addref(saved_rt); if (saved_ds) res_addref(saved_ds);
+    memcpy(dev->palette[0]+1,(uint32_t[]){0xff0000ff,0xff00ff00,0xffff0000,0xff00ffff},16);
+    dev->pal_version[0]++;
+    uint32_t w = sample_rt_widths[1], h = sample_rt_heights[1];
+    printf("sample_rt_table_va=006b1434 extent=%u,%u source_calls=00427ccc,00427d1a\n",w,h);
+    uint32_t texture = res_texture(w,h,1,1,FMT_A8R8G8B8,0,0);
+    uint32_t target = res_of(texture)->surf[0][0];
+    uint32_t depth = res_surface(640,480,FMT_D24S8,0,1);
+    int ok = !DEVICE(31,target,depth) && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    dev->rs[7] = dev->rs[14] = 1; dev->rs[23] = 4;
+    dev->rs[52] = 1; dev->rs[53] = dev->rs[54] = dev->rs[55] = 1;
+    dev->rs[56] = 3; dev->rs[57] = 7; dev->rs[58] = dev->rs[59] = 255;
+    DEVICE(36,0,0,7,0xff000000,0x3f800000,7);
+    float quad[24]; memcpy(quad,sample_geometry,sizeof quad);
+    for (int i = 0; i < 4; i++) { quad[i*6] *= w/64.f; quad[i*6+1] *= h/64.f; }
+    uint32_t vertices = copy_guest(quad,sizeof quad);
+    ok &= !DEVICE(72,5,2,vertices,24); gfree(vertices);
+    uint8_t *pixels = malloc((size_t)w*h*4);
+    if (!pixels) rt_fatal("framebuffer capture allocation failed");
+    glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+    FILE *file = fopen("framebuffer-512.ppm","wb");
+    if (file) {
+        fprintf(file,"P6\n%u %u\n255\n",w,h);
+        for (uint32_t i = 0; i < w*h; i++) fwrite(pixels+i*4,1,3,file);
+        ok &= !ferror(file); fclose(file);
+    } else ok = 0;
+    const int xy[][2] = {{128,128},{384,128},{128,500},{384,500}};
+    const uint8_t rgb[][3] = {{255,0,0},{0,255,0},{0,0,255},{255,255,0}};
+    for (int i = 0; i < 4; i++) ok &= !memcmp(pixels+((size_t)xy[i][1]*w+xy[i][0])*4,rgb[i],3);
+    free(pixels);
+    dev->rs[7] = dev->rs[52] = 0;
+    DEVICE(31,saved_rt,saved_ds); res_release(texture); res_release(depth);
+
+    uint32_t src = res_surface(64,48,FMT_A8R8G8B8,1,0);
+    uint32_t dst = res_surface(64,48,FMT_A8R8G8B8,1,0);
+    uint32_t image = res_surface(70,50,FMT_A8R8G8B8,0,0);
+    DEVICE(31,src,saved_ds);
+    ok &= resource_draw("copy-source.ppm",1);
+    ok &= !DEVICE(28,src,0,0,dst,0);
+    DEVICE(31,dst,saved_ds); ok &= resource_capture("copy-gpu.ppm");
+    Res *cpu = res_of(image); memset(GPTR(cpu->mem),0xcd,cpu->size);
+    uint32_t rect = copy_guest((int32_t[]){4,6,60,42},16);
+    uint32_t point = copy_guest((int32_t[]){3,1},8);
+    ok &= !DEVICE(28,src,rect,1,image,point);
+    ok &= MEM32(cpu->mem) == 0xcdcdcdcd && MEM32(cpu->mem+cpu->size-4) == 0xcdcdcdcd;
+    ok &= MEM32(cpu->mem+3*cpu->pitch+7*4) == 0xffff0000;
+    memcpy(GPTR(rect),(int32_t[]){3,1,59,37},16); memcpy(GPTR(point),(int32_t[]){4,6},8);
+    DEVICE(36,0,0,1,0xff000000,0x3f800000,0);
+    ok &= !DEVICE(28,image,rect,1,dst,point);
+    ok &= resource_capture("copy-upload.ppm") && pixel(8,8,255,0,0) && pixel(48,36,255,255,0) && pixel(2,2,0,0,0);
+    uint32_t locked = galloc(8);
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t color = pass ? 0xffff0000 : 0xff0000ff;
+        DEVICE(36,0,0,1,color,0x3f800000,0);
+        ok &= !method(dst,9,3,(uint32_t[]){locked,0,0x10});
+        int fresh = MEM32(MEM32(locked+4)) == color;
+        ok &= fresh; method(dst,10,0,NULL);
+        printf("readback_repeat=%d fresh=%s\n",pass,fresh ? "yes" : "no");
+    }
+    const struct { uint32_t fmt, packed; int bytes; } formats[] = {
+        {FMT_A8R8G8B8,0xffff0000,4},{FMT_R5G6B5,0xf800,2},
+        {FMT_A1R5G5B5,0xfc00,2},{FMT_A4R4G4B4,0xff00,2},
+    };
+    for (size_t i = 0; i < sizeof formats / sizeof *formats; i++) {
+        uint32_t surface = res_surface(64,48,formats[i].fmt,1,0);
+        DEVICE(31,surface,0); DEVICE(36,0,0,1,0xffff0000,0x3f800000,0);
+        method(surface,9,3,(uint32_t[]){locked,0,0x10});
+        uint32_t value = 0; memcpy(&value,GPTR(MEM32(locked+4)),formats[i].bytes);
+        method(surface,10,0,NULL);
+        GLenum error = glGetError();
+        printf("readback_format=%u value=%08x gl_error=%04x\n",formats[i].fmt,value,error);
+        ok &= value == formats[i].packed && !error;
+        DEVICE(31,saved_rt,saved_ds); res_release(surface);
+    }
+    DEVICE(31,saved_rt,saved_ds);
+    res_release(src); res_release(dst); res_release(image);
+    res_release(saved_rt); if (saved_ds) res_release(saved_ds);
+    gfree(rect); gfree(point); gfree(locked);
+    GLenum error = glGetError();
+    printf("framebuffer_roundtrip=%s gl_error=%04x\n",ok && !error ? "PASS" : "FAIL",error);
+    return ok && !error;
+#endif
+}
+
+static int front_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    uint32_t saved_tex = dev->tex[0], saved_ps = dev->ps;
+    int ok = resource_draw("front-source.ppm",1) && !DEVICE(15,0,0,0,0);
+    DEVICE(36,0,0,1,0xffff00ff,0x3f800000,0); /* Next backbuffer must not replace front. */
+    uint32_t image = res_surface(70,50,FMT_A8R8G8B8,0,0);
+    Res *cpu = res_of(image); memset(GPTR(cpu->mem),0xcd,cpu->size);
+    ok &= !DEVICE(30,image);
+    const int xy[][2] = {{16,12},{48,12},{16,36},{48,36}};
+    const uint32_t colors[] = {0xffff0000,0xff00ff00,0xff0000ff,0xffffff00};
+    for (int i = 0; i < 4; i++) ok &= MEM32(cpu->mem+xy[i][1]*cpu->pitch+xy[i][0]*4) == colors[i];
+    int untouched = MEM32(cpu->mem+64*4) == 0xcdcdcdcd && MEM32(cpu->mem+48*cpu->pitch) == 0xcdcdcdcd;
+    ok &= untouched;
+    printf("front_snapshot=last-presented outside_untouched=%s\n",untouched ? "yes" : "no");
+    dev->tex[0] = res_texture(64,48,1,0,FMT_A8R8G8B8,0,0);
+    uint32_t surface = res_of(dev->tex[0])->surf[0][0];
+    uint32_t rect = copy_guest((int32_t[]){0,0,64,48},16);
+    ok &= !DEVICE(28,image,rect,1,surface,0);
+    uint32_t states[TSS_COUNT]; memcpy(states,dev->tss[0],sizeof states);
+    dev->ps = 0; dev->rs[27] = 1; dev->rs[19] = 5; dev->rs[20] = 6;
+    dev->rs[60] = 0x80ffffff; dev->tss[0][4] = 2; dev->tss[0][5] = 3;
+    ok &= resource_draw("front-preview.ppm",1);
+    const uint8_t rgb[][3] = {{128,0,0},{0,128,0},{0,0,128},{128,128,0}};
+    for (int i = 0; i < 4; i++) for (int c = 0; c < 3; c++)
+        ok &= abs(frame[(xy[i][1]*64+xy[i][0])*4+c]-rgb[i][c]) <= 1;
+    dev->rs[27] = 0; dev->rs[19] = 2; dev->rs[20] = 1; dev->rs[60] = 0xffffffff;
+    memcpy(dev->tss[0],states,sizeof states);
+    res_release(dev->tex[0]); dev->tex[0] = saved_tex; dev->ps = saved_ps;
+    res_release(image); gfree(rect);
+    printf("front_preview=%s\n",ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
+static int sampler_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    const struct { const char *name; uint32_t mode, filter; float u; int rgb[3]; } cases[] = {
+        {"wrap",1,1,-.25f,{0,255,0}}, {"mirror",2,1,-.25f,{255,0,0}},
+        {"edge",3,1,-.25f,{255,0,0}}, {"border",4,1,-.25f,{0,0,255}},
+        {"border-linear",4,2,0,{128,0,128}}, {"linear",3,2,.5f,{128,128,0}},
+    };
+    uint32_t states[TSS_COUNT]; memcpy(states,dev->tss[0],sizeof states);
+    int ok = 1;
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        dev->tss[0][13] = dev->tss[0][14] = cases[i].mode;
+        dev->tss[0][16] = dev->tss[0][17] = cases[i].filter;
+        dev->tss[0][15] = 0xff0000ff;
+        float quad[24]; memcpy(quad,sample_geometry,sizeof quad);
+        for (int v = 0; v < 4; v++) {
+            quad[v*6+1] *= 48.f/64.f;
+            quad[v*6+4] = cases[i].u; quad[v*6+5] = .25f;
+        }
+        DEVICE(36,0,0,7,0xff000000,0x3f800000,0);
+        uint32_t vertices = copy_guest(quad,sizeof quad);
+        ok &= !DEVICE(72,5,2,vertices,24); gfree(vertices);
+        char name[64]; snprintf(name,sizeof name,"sampler-%s.ppm",cases[i].name);
+        int pass = resource_capture(name);
+        for (int c = 0; c < 3; c++) pass &= abs(frame[(24*64+32)*4+c]-cases[i].rgb[c]) <= 1;
+        printf("sampler=%s result=%s\n",cases[i].name,pass ? "PASS" : "FAIL");
+        ok &= pass;
+    }
+    memcpy(dev->tss[0],states,sizeof states);
+    printf("samplers=%s\n",ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
+static int resource_memory_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    const uint32_t formats[] = {FMT_A8R8G8B8,FMT_R5G6B5,FMT_A1R5G5B5,FMT_A4R4G4B4,
+                               FMT_P8,FMT_DXT1,FMT_DXT3,FMT_DXT5};
+    uint32_t saved = dev->tex[0];
+    int ok = 1;
+    for (size_t i = 0; i < sizeof formats / sizeof *formats; i++) {
+        dev->tex[0] = res_texture(512,512,0,0,formats[i],0,0);
+        Res *t = res_of(dev->tex[0]);
+        for (uint32_t l = 0; l < t->levels; l++) {
+            Res *s = res_of(t->surf[0][l]);
+            memset(GPTR(s->mem),0,s->size); s->dirty = 1;
+        }
+        t->dirty = 1;
+        char name[64]; snprintf(name,sizeof name,"memory-%u.ppm",formats[i]);
+        ok &= resource_draw(name,1) && pixel(32,24,0,0,0);
+        res_release(t->obj);
+    }
+    dev->tex[0] = saved;
+    struct rusage usage = {0};
+    ok &= !getrusage(RUSAGE_SELF,&usage);
+    printf("graphics_peak_rss_kib=%ld\nresource_memory=%s\n",usage.ru_maxrss,ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
+static int locked_target_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    uint32_t saved_rt = dev->rt, saved_ds = dev->ds;
+    res_addref(saved_rt); if (saved_ds) res_addref(saved_ds);
+    uint32_t target = res_surface(64,48,FMT_A8R8G8B8,1,0);
+    uint32_t image = res_surface(64,48,FMT_A8R8G8B8,0,0), locked = galloc(8);
+    DEVICE(31,target,0); DEVICE(36,0,0,1,0xff00ff00,0x3f800000,0);
+    method(target,9,3,(uint32_t[]){locked,0,0x10}); method(target,10,0,NULL);
+    Res *cpu = res_of(image);
+    for (uint32_t i = 0; i < cpu->size; i += 4) MEM32(cpu->mem+i) = 0xff0000ff;
+    int ok = !DEVICE(28,image,0,0,target,0);
+    ok &= resource_capture("copy-after-lock.ppm") && pixel(48,36,0,0,255);
+    uint32_t rect = copy_guest((int32_t[]){0,0,16,16},16);
+    ok &= !method(target,9,3,(uint32_t[]){locked,rect,0});
+    for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++)
+        MEM32(MEM32(locked+4)+y*MEM32(locked)+x*4) = 0xffffff00;
+    ok &= !method(target,10,0,NULL);
+    ok &= resource_capture("locked-target-update.ppm") && pixel(8,8,255,255,0) && pixel(48,36,0,0,255);
+    DEVICE(31,saved_rt,saved_ds);
+    res_release(target); res_release(image); res_release(saved_rt); if (saved_ds) res_release(saved_ds);
+    gfree(locked); gfree(rect);
+    printf("locked_target_update=%s\n",ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
+static int compressed_copy_sample(void) {
+#ifndef SH3_GLES_SAMPLES
+    return 0;
+#else
+    const uint32_t formats[] = {FMT_DXT1,FMT_DXT3,FMT_DXT5};
+    uint32_t saved = dev->tex[0];
+    int ok = 1;
+    for (int i = 0; i < 3; i++) {
+        uint32_t source = res_surface(1,1,formats[i],0,0);
+        Res *s = res_of(source); uint8_t *block = GPTR(s->mem);
+        memset(block,0,s->size);
+        if (i == 1) memset(block,255,8);
+        if (i == 2) block[0] = 255;
+        uint16_t magenta = 0xf81f; memcpy(block+(i ? 8 : 0),&magenta,2);
+        dev->tex[0] = res_texture(1,1,1,0,formats[i],0,0);
+        uint32_t destination = res_of(dev->tex[0])->surf[0][0];
+        ok &= !DEVICE(28,source,0,0,destination,0);
+        char name[64]; snprintf(name,sizeof name,"dxt%d-copy-tail.ppm",i == 0 ? 1 : i == 1 ? 3 : 5);
+        ok &= resource_draw(name,1) && pixel(32,24,255,0,255);
+        res_release(source); res_release(dev->tex[0]);
+    }
+    dev->tex[0] = saved;
+    printf("compressed_copy_tail=%s\n",ok ? "PASS" : "FAIL");
+    return ok;
+#endif
+}
+
 static int desktop_reference(void) {
     const char *value = getenv("SH3_GRAPHICS_REFERENCE");
     return value && !strcmp(value, "1");
@@ -394,6 +866,11 @@ static int identity(void) {
     GLint n = 0; glGetIntegerv(GL_NUM_EXTENSIONS, &n);
     printf("gl_extensions_count=%d\n", n);
     for (int i = 0; i < n; i++) printf("gl_extension=%s\n", glGetStringi(GL_EXTENSIONS, i));
+    glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &n);
+    GLint *formats = calloc(n ? n : 1, sizeof *formats);
+    glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, formats);
+    for (int i = 0; i < n; i++) printf("compressed_format=%04x\n",formats[i]);
+    free(formats);
     void *egl = SDL_LoadObject("libEGL.so.1");
     if (!egl) return 0;
     void *(*current)(void) = SDL_LoadFunction(egl, "eglGetCurrentDisplay");
@@ -434,6 +911,7 @@ static int identity(void) {
 int rt_gles_diagnostics(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     setenv("SH3_SHADER_DUMP", "1", 1);
+    setenv("SH3_RESOURCE_DUMP", "1", 1);
     SDL_GLContext context = NULL;
     if (SDL_Init(SDL_INIT_VIDEO)) goto unavailable;
     gl_prepare_context();
@@ -447,7 +925,16 @@ int rt_gles_diagnostics(void) {
     if (ok) {
         ok &= indexed_sample(); ok &= scissor_sample(); ok &= culling_sample();
         ok &= depth_sample(); ok &= stencil_sample(); ok &= precision_sample();
-        ok &= rhw_depth_sample(); ok &= packed_color_sample(); ok &= presentation_sample();
+        ok &= rhw_depth_sample(); ok &= packed_color_sample();
+        ok &= texture_format_sample(); ok &= palette_sample(); ok &= mip_sample();
+        ok &= dxt_sample(); ok &= dxt_edge_sample();
+        ok &= framebuffer_sample();
+        ok &= front_sample();
+        ok &= sampler_sample();
+        ok &= resource_memory_sample();
+        ok &= locked_target_sample();
+        ok &= compressed_copy_sample();
+        ok &= presentation_sample();
     }
     printf("%s=%s\n", desktop_reference() ? "desktop_reference" : "gles", ok ? "PASS" : "FAIL");
     SDL_GL_DeleteContext(context);

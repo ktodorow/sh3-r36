@@ -92,6 +92,12 @@ output += ['static const uint32_t sample_skin_decl[] = {' + ",".join(f"0x{x:08x}
 geometry = struct.unpack_from("<24I", source, 0x2b0d00)
 output += ['#define SAMPLE_GEOMETRY_VA 0x006b0d00u',
            'static const uint32_t sample_geometry[] = {' + ",".join(f"0x{x:08x}u" for x in geometry) + "};"]
+# Render-target dimensions read by original CreateTexture wrappers 0x427c70/ce0.
+for name, offset in [("widths", 0x2b1434), ("heights", 0x2b1444)]:
+    sizes = struct.unpack_from("<4I", source, offset)
+    if sizes != (64, 512, 256, 256):
+        raise ValueError("Resource sample provenance mismatch")
+    output += [f'static const uint32_t sample_rt_{name}[] = {{' + ",".join(map(str,sizes)) + "};"]
 target = Path(sys.argv[2])
 target.parent.mkdir(parents=True, exist_ok=True)
 target.write_text("\n".join(output) + "\n")

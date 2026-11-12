@@ -97,13 +97,13 @@ Source, generated C, owner data, `dist/`, `.port-cache/` and `r36s-dumps/` survi
 No named volumes or dedicated builder created; shared Docker layer cache remains
 untouched. Generation/build caches inside `build/` are disposable.
 
-## GLES diagnostics (task #3)
+## GLES diagnostics (tasks #3–4)
 
 `python3 scripts/host/r36s.py gles --reviewed-helpers r36s-dumps/sh3/<inventory-run-id>`
 deploys native package, installs `/roms2/ports/Silent Hill 3 Graphics Diagnostics.sh`
 and runs GLES probe through same launcher. Uses `/roms2/ports/sh3` and firmware
 SDL/EGL/GLES providers. Opens graphics window; frontend remains running. Collects
-stdout, stderr, status, generated GLSL, provider mappings and PPM captures into
+stdout, stderr, status, generated GLSL, provider mappings, PPM and raw RGBA captures into
 run-owned directory. Owner-derived vertex/fragment samples, original quad,
 indexed/base-vertex, skinning, precision, culling/scissor/depth/stencil and RHW
 depth fallback must all pass before exit0/`gles=PASS`. Final quad presents for
@@ -111,8 +111,15 @@ three seconds, then returns through normal PortMaster cleanup. No game-data
 upload required; build embeds selected private samples for personal testing.
 
 `SH3_GLES_EVIDENCE=r36s-dumps/sh3/<graphics-run-id> python3 -m unittest tests.test_gles_evidence.GraphicsEvidenceTests -v`
-checks independent pixels and actual identity/lifecycle evidence. Full resource
-matrix remains task #4; this probe does not establish gameplay or performance.
+checks independent pixels and actual identity/lifecycle evidence. Resource samples
+cover BGRA/packed uploads, palette alpha/selection, mip and lock updates, separate
+DXT1/3/5 alpha rules, block edges/tails, framebuffer depth extent, copies, fresh
+packed readback, last-presented preview fades and sampler border/filter behavior.
+512×512 full-mip uploads log retained source bytes, peak per-level scratch and
+logical GPU storage; process peak RSS logged separately. GPU storage excludes
+driver padding/metadata. Original bytes retained; unsupported DXT expands during
+upload, without offline re-encoding. This probe does not establish gameplay,
+complete renderer compatibility, full-game memory fit or performance.
 
 `python3 scripts/host/test-runtime.py` also runs same diagnostic via launcher
 with `SH3_GL_BACKEND=desktop`, `SH3_GRAPHICS_REFERENCE=1`, SDL offscreen and Mesa

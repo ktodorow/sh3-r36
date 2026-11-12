@@ -165,10 +165,124 @@ static GLenum face_target(Res *t, int face) {
     return t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D;
 }
 
+/* BGRA8888's ES extension does not legalize desktop BGRA/REV packed combinations.
+ * Keep guest bytes intact; use core RGBA8 storage and a bounded upload scratch copy. */
+static int rgba_upload(const Fmt *f) { return gl_es && f->gfmt == GL_BGRA; }
+
+static int native_block(const Fmt *f) {
+    static SDL_GLContext context;
+    static int supported[3];
+    if (context != SDL_GL_GetCurrentContext()) {
+        context = SDL_GL_GetCurrentContext();
+        memset(supported, 0, sizeof supported);
+        GLint n = 0; glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &n);
+        GLint *formats = calloc(n ? n : 1, sizeof *formats);
+        if (!formats) rt_fatal("compressed format query allocation failed");
+        glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, formats);
+        for (int i = 0; i < n; i++) for (int j = 0; j < 3; j++)
+            if (formats[i] == 0x83f1+j) supported[j] = 1;
+        free(formats);
+        /* Some desktop lists omit RGBA DXT1 while exposing RGB DXT1. Named
+         * extensions guarantee their specified formats, including alpha DXT1. */
+        glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+        for (int i = 0; i < n; i++) {
+            const char *extension = (const char *)glGetStringi(GL_EXTENSIONS,i);
+            if (!strcmp(extension,"GL_EXT_texture_compression_s3tc"))
+                supported[0] = supported[1] = supported[2] = 1;
+            if (!strcmp(extension,"GL_EXT_texture_compression_dxt1")) supported[0] = 1;
+            if (!strcmp(extension,"GL_ANGLE_texture_compression_dxt3")) supported[1] = 1;
+            if (!strcmp(extension,"GL_ANGLE_texture_compression_dxt5")) supported[2] = 1;
+        }
+        if (getenv("SH3_RESOURCE_DUMP")) for (int j = 0; j < 3; j++)
+            printf("resource_compression format=%04x native=%s\n",0x83f1+j,supported[j] ? "yes" : "no");
+    }
+    return supported[f->ifmt - 0x83f1];
+}
+
+/* Runtime S3TC expansion, one mip/face at a time. Source stays compressed in
+ * guest memory; DXT2/4 aliases retain their premultiplied color bytes. */
+static uint8_t *decode_blocks(const Fmt *f, const uint8_t *src, uint32_t w, uint32_t h) {
+    uint8_t *out = malloc((size_t)w*h*4);
+    if (!out) rt_fatal("S3TC decode scratch allocation failed");
+    for (uint32_t by = 0; by < (h+3)/4; by++) for (uint32_t bx = 0; bx < (w+3)/4; bx++) {
+        const uint8_t *block = src + (by*((w+3)/4)+bx)*f->block;
+        const uint8_t *color = block + (f->block == 8 ? 0 : 8);
+        unsigned c0 = color[0] | color[1]<<8, c1 = color[2] | color[3]<<8;
+        uint8_t rgb[4][4] = {{0,0,0,255},{0,0,0,255},{0,0,0,255},{0,0,0,255}};
+        for (int i = 0; i < 2; i++) {
+            unsigned v = i ? c1 : c0, r = v>>11, g = (v>>5)&63, b = v&31;
+            rgb[i][0] = (r<<3)|(r>>2); rgb[i][1] = (g<<2)|(g>>4); rgb[i][2] = (b<<3)|(b>>2);
+        }
+        if (f->block == 8 && c0 <= c1) {
+            for (int c = 0; c < 3; c++) rgb[2][c] = (rgb[0][c]+rgb[1][c])/2;
+            rgb[3][3] = 0;
+        } else for (int c = 0; c < 3; c++) {
+            rgb[2][c] = (2*rgb[0][c]+rgb[1][c])/3;
+            rgb[3][c] = (rgb[0][c]+2*rgb[1][c])/3;
+        }
+        uint8_t alpha[8] = {block[0],block[1]};
+        uint64_t alpha_bits = 0;
+        if (f->ifmt == 0x83f3) {
+            for (int i = 0; i < 6; i++) alpha_bits |= (uint64_t)block[2+i] << (8*i);
+            if (alpha[0] > alpha[1]) for (int i = 2; i < 8; i++)
+                alpha[i] = ((8-i)*alpha[0]+(i-1)*alpha[1])/7;
+            else {
+                for (int i = 2; i < 6; i++) alpha[i] = ((6-i)*alpha[0]+(i-1)*alpha[1])/5;
+                alpha[6] = 0; alpha[7] = 255;
+            }
+        }
+        for (uint32_t y = 0; y < 4 && by*4+y < h; y++)
+            for (uint32_t x = 0; x < 4 && bx*4+x < w; x++) {
+                unsigned i = y*4+x, code = (color[4+y]>>(2*x))&3;
+                uint8_t *p = out + ((size_t)(by*4+y)*w+bx*4+x)*4;
+                memcpy(p, rgb[code], 4);
+                if (f->ifmt == 0x83f2) p[3] = ((block[i/2]>>((i&1)*4))&15)*17;
+                if (f->ifmt == 0x83f3) p[3] = alpha[(alpha_bits>>(i*3))&7];
+            }
+    }
+    return out;
+}
+
+static void upload_pixels(GLenum target, int level, int x, int y, int w, int h,
+                          const Fmt *f, const uint8_t *src, int pitch) {
+    if (!rgba_upload(f)) {
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, pitch / f->bpp);
+        glTexSubImage2D(target, level, x, y, w, h, f->gfmt, f->type, src);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        return;
+    }
+    uint8_t *rgba = malloc((size_t)w * h * 4);
+    if (!rgba) rt_fatal("RGBA upload scratch allocation failed");
+    for (int row = 0; row < h; row++) for (int col = 0; col < w; col++) {
+        const uint8_t *p = src + row * pitch + col * f->bpp;
+        uint8_t *q = rgba + ((size_t)row * w + col) * 4;
+        if (f->bpp == 4) { q[0] = p[2]; q[1] = p[1]; q[2] = p[0]; q[3] = p[3]; }
+        else {
+            uint16_t v; memcpy(&v, p, 2);
+            if (f->type == GL_UNSIGNED_SHORT_1_5_5_5_REV) {
+                int r = (v >> 10) & 31, g = (v >> 5) & 31, b = v & 31;
+                q[0] = (r << 3) | (r >> 2); q[1] = (g << 3) | (g >> 2);
+                q[2] = (b << 3) | (b >> 2); q[3] = v & 0x8000 ? 255 : 0;
+            } else {
+                q[0] = ((v >> 8) & 15) * 17; q[1] = ((v >> 4) & 15) * 17;
+                q[2] = (v & 15) * 17; q[3] = (v >> 12) * 17;
+            }
+        }
+    }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glTexSubImage2D(target, level, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    if (getenv("SH3_RESOURCE_DUMP"))
+        printf("resource_upload format=%u source_bytes=%d scratch_bytes=%d gpu_logical_bytes=%d path=rgba8\n",
+               f->fmt, w*h*f->bpp, w*h*4, w*h*4);
+    free(rgba);
+}
+
 /* Creates the GL texture of a texture or standalone surface, with every level allocated. */
 static void gl_ensure(Res *t) {
     if (t->tex) return;
     const Fmt *f = fmt_info(t->fmt);
+    int compressed = f->block && native_block(f);
+    int expanded = rgba_upload(f) || (f->block && !compressed);
     GLenum target = t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
     glGenTextures(1, &t->tex);
     glBindTexture(target, t->tex);
@@ -179,18 +293,28 @@ static void gl_ensure(Res *t) {
                                     GL_TEXTURE_SWIZZLE_B, GL_TEXTURE_SWIZZLE_A};
         for (int i = 0; i < 4; i++) glTexParameteri(target, component[i], f->swz[i]);
     } else glTexParameteriv(target, GL_TEXTURE_SWIZZLE_RGBA, f->swz);
+    uint32_t source_bytes = 0, gpu_bytes = 0;
     for (int face = 0; face < (t->kind == RES_CUBE ? 6 : 1); face++)
         for (uint32_t l = 0; l < levels; l++) {
             uint32_t w = t->w >> l ? t->w >> l : 1, h = t->h >> l ? t->h >> l : 1, pitch, size;
+            level_size(f,w,h,&pitch,&size);
+            if (!t->is_rt && !t->is_depth) source_bytes += size;
+            gpu_bytes += t->is_depth || expanded || f->fmt == FMT_P8
+                         ? w*h*4 : size;
             if (t->is_depth)
                 glTexImage2D(face_target(t, face), l, GL_DEPTH24_STENCIL8, w, h, 0, GL_DEPTH_STENCIL,
                              GL_UNSIGNED_INT_24_8, NULL);
-            else if (f->block) {
-                level_size(f, w, h, &pitch, &size);
+            else if (compressed) {
                 glCompressedTexImage2D(face_target(t, face), l, f->ifmt, w, h, 0, size, NULL);
-            } else glTexImage2D(face_target(t, face), l, f->ifmt, w, h, 0,
-                                gl_es && t->is_rt ? GL_RGBA : f->gfmt, f->type, NULL);
+            } else glTexImage2D(face_target(t, face), l, expanded ? GL_RGBA8 : f->ifmt, w, h, 0,
+                                expanded ? GL_RGBA : f->gfmt, expanded ? GL_UNSIGNED_BYTE : f->type, NULL);
         }
+    if (getenv("SH3_RESOURCE_DUMP")) {
+        uint32_t scratch = source_bytes && (expanded || f->fmt == FMT_P8)
+                           ? t->w*t->h*4 : 0;
+        printf("resource_storage format=%u levels=%u source_bytes=%u scratch_peak_bytes=%u gpu_logical_bytes=%u\n",
+               t->fmt,levels,source_bytes,scratch,gpu_bytes);
+    }
 }
 
 static GLuint surface_tex(Res *s) { if (s->parent) { gl_ensure(s->parent); return s->parent->tex; } gl_ensure(s); return s->tex; }
@@ -201,7 +325,19 @@ static void upload_level(Res *t, Res *s) {
     GLenum target = face_target(t, s->face);
     glBindTexture(t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D, t->tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    if (f->block) glCompressedTexSubImage2D(target, s->level, 0, 0, s->w, s->h, f->ifmt, s->size, GPTR(s->mem));
+    if (f->block) {
+        int native = native_block(f);
+        if (native) glCompressedTexSubImage2D(target, s->level, 0, 0, s->w, s->h, f->ifmt, s->size, GPTR(s->mem));
+        else {
+            uint8_t *rgba = decode_blocks(f,GPTR(s->mem),s->w,s->h);
+            glTexSubImage2D(target,s->level,0,0,s->w,s->h,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+            free(rgba);
+        }
+        if (getenv("SH3_RESOURCE_DUMP"))
+            printf("resource_upload format=%u source_bytes=%u scratch_bytes=%u gpu_logical_bytes=%u path=%s\n",
+                   f->fmt,s->size,native ? 0 : s->w*s->h*4,native ? s->size : s->w*s->h*4,
+                   native ? "native-s3tc" : "decoded-rgba8");
+    }
     else if (s->fmt == FMT_P8) {
         /* The indices through the current palette. PALETTEENTRY is R,G,B,flags in memory, and flags
          * is the alpha (D3DPTEXTURECAPS_ALPHAPALETTE, as on the GeForce-class cards the game was made
@@ -209,6 +345,7 @@ static void upload_level(Res *t, Res *s) {
          * (issue #1, Heather's hair in the real-time cutscenes). A palette with no alpha set at all is
          * opaque, not invisible. */
         uint32_t *rgba = malloc(4u * s->w * s->h);
+        if (!rgba) rt_fatal("palette upload scratch allocation failed");
         const uint8_t *src = GPTR(s->mem);
         static const uint32_t none[256];
         const uint32_t *pal = dev->palette[dev->cur_palette] ? dev->palette[dev->cur_palette] : none;
@@ -218,7 +355,7 @@ static void upload_level(Res *t, Res *s) {
         for (uint32_t i = 0; i < s->w * s->h; i++) rgba[i] = pal[src[i]] | opaque;
         glTexSubImage2D(target, s->level, 0, 0, s->w, s->h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         free(rgba);
-    } else glTexSubImage2D(target, s->level, 0, 0, s->w, s->h, f->gfmt, f->type, GPTR(s->mem));
+    } else upload_pixels(target, s->level, 0, 0, s->w, s->h, f, GPTR(s->mem), s->pitch);
     s->dirty = 0;
 }
 
@@ -283,6 +420,44 @@ void res_bind_targets(void) {
     if (st != GL_FRAMEBUFFER_COMPLETE) rt_log("framebuffer incomplete: %04X (rt %ux%u fmt %u)", st, rt->w, rt->h, rt->fmt);
 }
 
+/* ES guarantees RGBA/UNSIGNED_BYTE for normalized color targets. The BGRA
+ * upload extension does not guarantee packed BGRA readback combinations. */
+static void read_pixels(uint32_t w, uint32_t h, const Fmt *f, uint8_t *dst, uint32_t pitch) {
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    if (!rgba_upload(f)) {
+        glPixelStorei(GL_PACK_ROW_LENGTH, pitch / f->bpp);
+        glReadPixels(0,0,w,h,f->gfmt,f->type,dst);
+        glPixelStorei(GL_PACK_ROW_LENGTH,0);
+        return;
+    }
+    uint8_t *rgba = malloc((size_t)w*h*4);
+    if (!rgba) rt_fatal("RGBA readback scratch allocation failed");
+    glPixelStorei(GL_PACK_ROW_LENGTH,0);
+    glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+    for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
+        const uint8_t *p = rgba+((size_t)y*w+x)*4;
+        uint8_t *q = dst+y*pitch+x*f->bpp;
+        if (f->bpp == 4) { q[0] = p[2]; q[1] = p[1]; q[2] = p[0]; q[3] = p[3]; }
+        else {
+            uint16_t v;
+            if (f->type == GL_UNSIGNED_SHORT_1_5_5_5_REV)
+                v = (p[3]>=128 ? 0x8000 : 0) | ((p[0]*31+127)/255)<<10 |
+                    ((p[1]*31+127)/255)<<5 | (p[2]*31+127)/255;
+            else v = ((p[3]*15+127)/255)<<12 | ((p[0]*15+127)/255)<<8 |
+                     ((p[1]*15+127)/255)<<4 | (p[2]*15+127)/255;
+            memcpy(q,&v,2);
+        }
+    }
+    if (getenv("SH3_RESOURCE_DUMP")) {
+        GLint format = 0, type = 0;
+        glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT,&format);
+        glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE,&type);
+        printf("resource_readback format=%u legal_pair=1908,1401 implementation_pair=%04x,%04x scratch_bytes=%u\n",
+               f->fmt,format,type,w*h*4);
+    }
+    free(rgba);
+}
+
 /* Reads a render target back into the surface's guest copy, for locks of rendered images. */
 static void readback(Res *s) {
     const Fmt *f = fmt_info(s->fmt);
@@ -291,8 +466,7 @@ static void readback(Res *s) {
     glGenFramebuffers(1, &fb);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, surface_tex(s), s->level);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, s->w, s->h, f->gfmt, f->type, GPTR(s->mem));
+    read_pixels(s->w,s->h,f,GPTR(s->mem),s->pitch);
     glDeleteFramebuffers(1, &fb);
     glBindFramebuffer(GL_FRAMEBUFFER, dev->fbo);
 }
@@ -333,13 +507,11 @@ uint32_t res_read_front(uint32_t dst_o) {
     /* the presented frame when there is one, else the back buffer */
     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            front_tex && front_w == src->w && front_h == src->h ? front_tex : surface_tex(src), 0);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glPixelStorei(GL_PACK_ROW_LENGTH, dst->pitch / 4);
-    glReadPixels(0, 0, src->w < dst->w ? src->w : dst->w, src->h < dst->h ? src->h : dst->h, GL_BGRA,
-                 GL_UNSIGNED_BYTE, GPTR(dst->mem));
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    uint32_t w = src->w < dst->w ? src->w : dst->w, h = src->h < dst->h ? src->h : dst->h;
+    read_pixels(w,h,fmt_info(dst->fmt),GPTR(dst->mem),dst->pitch);
     glDeleteFramebuffers(1, &fb);
-    for (uint32_t i = 0; i < dst->size; i += 4) *(uint8_t *)GPTR(dst->mem + i + 3) = 0xFF;
+    for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++)
+        *(uint8_t *)GPTR(dst->mem+y*dst->pitch+x*4+3) = 0xFF;
     mark_dirty(dst);
     res_bind_targets();
     return 0;
@@ -370,19 +542,17 @@ uint32_t res_copy_rects(uint32_t src_o, uint32_t rects, uint32_t n, uint32_t dst
         }
         if (src->is_rt) readback(src);
         const Fmt *f = fmt_info(src->fmt);
-        if (dst->mem) {  /* row copies between guest copies */
+        if (!dst->is_rt && dst->mem) {  /* row copies between guest copies */
             int bpp = f->block ? f->block : f->bpp, div = f->block ? 4 : 1;
-            for (int y = 0; y < h / div; y++)
+            for (int y = 0; y < (h + div - 1) / div; y++)
                 memcpy(GPTR(dst->mem + (dy / div + y) * dst->pitch + dx / div * bpp),
-                       GPTR(src->mem + (r[1] / div + y) * src->pitch + r[0] / div * bpp), w / div * bpp);
+                       GPTR(src->mem + (r[1] / div + y) * src->pitch + r[0] / div * bpp), (w + div - 1) / div * bpp);
             mark_dirty(dst);
         } else {         /* guest copy into a render target */
             glBindTexture(GL_TEXTURE_2D, surface_tex(dst));
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, src->w);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexSubImage2D(GL_TEXTURE_2D, dst->level, dx, dy, w, h, f->gfmt, f->type,
-                            GPTR(src->mem + r[1] * src->pitch + r[0] * f->bpp));
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            upload_pixels(GL_TEXTURE_2D,dst->level,dx,dy,w,h,f,
+                          GPTR(src->mem+r[1]*src->pitch+r[0]*f->bpp),src->pitch);
         }
     }
     return 0;
@@ -423,7 +593,7 @@ static Res *level_of(Res *t, int face, uint32_t l) { return l < t->levels ? res_
 
 static uint32_t lock_surface(Res *s, uint32_t locked, uint32_t rect) {
     if (!s) return D3DERR_INVALIDCALL;
-    if (!s->mem) readback(s);
+    if (s->is_rt || !s->mem) readback(s);
     uint32_t off = 0;
     if (rect) {
         const int32_t *r = GPTR(rect);
@@ -441,7 +611,7 @@ static uint32_t unlock_surface(Res *s) {
         const Fmt *f = fmt_info(s->fmt);
         glBindTexture(GL_TEXTURE_2D, surface_tex(s));
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, s->w, s->h, f->gfmt, f->type, GPTR(s->mem));
+        upload_pixels(GL_TEXTURE_2D,0,0,0,s->w,s->h,f,GPTR(s->mem),s->pitch);
     }
     return 0;
 }
