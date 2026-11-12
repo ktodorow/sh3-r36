@@ -45,18 +45,25 @@ const char *rt_path(const char *guest, char *out, size_t n) {
     if (!strncasecmp(p, "/SH3/", 5)) p += 5;       /* the folder GetFullPathNameA reports */
     while (*p == '/') p++;
     if (!strncmp(p, "./", 2)) p += 2;
+    const char *root = getenv("SH3_DATA_DIR");
+    int asset = root && *root && (!strcasecmp(p, "sh3.exe") ||
+                                !strcasecmp(p, "data") || !strncasecmp(p, "data/", 5));
+    char exact[1024];
+    snprintf(exact, sizeof exact, "%s%s%s", asset ? root : "", asset ? "/" : "", p);
     struct stat st;
-    if (*p && stat(p, &st) == 0) {  /* exact spelling exists: no directory scans */
-        snprintf(out, n, "%s", p);
+    if (*p && stat(exact, &st) == 0) {  /* exact spelling exists: no directory scans */
+        snprintf(out, n, "%s", exact);
         return out;
     }
     out[0] = 0;
     size_t len = 0;
+    if (asset) len = snprintf(out, n, "%s", root);
     for (const char *s = p; *s;) {
         size_t cl = strcspn(s, "/");
         char comp[256], real[256];
         snprintf(comp, sizeof comp, "%.*s", (int)cl, s);
         if (!match_ci(out, comp, real, sizeof real)) snprintf(real, sizeof real, "%s", comp);
+        if (len >= n) rt_fatal("game path too long");
         len += snprintf(out + len, n - len, "%s%s", len ? "/" : "", real);
         s += cl;
         while (*s == '/') s++;

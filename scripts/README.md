@@ -5,8 +5,9 @@ Menu entries: `/roms2/ports/Silent Hill 3 Preflight.sh` and
 `/roms2/ports/Silent Hill 3 Runtime Diagnostics.sh`, plus
 `/roms2/ports/Silent Hill 3 Graphics Diagnostics.sh`. Preflight checks data;
 runtime diagnostics exercise native memory, threads, signals and timers without
-rendering. Workflows do not stop frontend, mount runtimes, install packages,
-change clocks or modify firmware.
+rendering. Game entry uses separate `sh3-r36s-game.service`, stops
+`emulationstation.service` while game runs, then restores it. Diagnostics leave
+frontend running. No runtime mounts, package installs, clock or firmware changes.
 
 ## Private configuration
 
@@ -42,11 +43,57 @@ data and saves remain untouched. Attempt collection even after deployment or
 execution failure; distinguish unavailable device from validation failure.
 Inventory includes completed menu-run logs under `device/previous-launches/`,
 so physical menu tests can be collected through same unattended host command.
+Completed detached game sessions also include per-session service recovery logs.
+Explicit sh3.ini, savedata/disp.ini, data.001 and data.sys copies preserve display
+preferences and first checkpoint for replay; source sessions remain untouched.
 
 Scripts live in `scripts/host/` and `scripts/device/`; launcher lives in `ports/`.
 Only reviewed project files and explicit native package files deploy. Original
 assets do not deploy in these workflows. Missing target tools are recorded, never installed.
 Target identity does not prove active SDL backend, GLES operations or gameplay.
+
+Task #5 uses owner-copied `/roms2/ports/sh3/gamedata/sh3.exe` and complete
+`gamedata/data/`, then fresh inventory and preflight before game execution.
+`SH3_DATA_HASHES=1` makes data checker record SHA-256 identities of available assets,
+including failed preflights; hashing never changes originals.
+Use `python3 scripts/host/r36s.py preflight --hash-data --reviewed-helpers r36s-dumps/sh3/<inventory-run-id>`
+for complete local/target SHA-256 inventory. Allow up to ten minutes for SD reads;
+host still collects failed runs. Verify with
+`SH3_DATA_EVIDENCE=r36s-dumps/sh3/<hash-run-id> PYTHONPATH=tests python3 -m unittest test_game_evidence.GameDataEvidenceTests -v`.
+
+`python3 scripts/host/r36s.py game --reviewed-helpers r36s-dumps/sh3/<inventory-run-id>`
+installs **Silent Hill 3 Game**, then runs 100-second game probe. Latest completed
+first checkpoint is copied into new session when available; otherwise probe
+uses opening-sequence keys. Captures initial frames then one every 60 frames for
+stationary scene comparison; physical menu launch has no image capture. Game receives
+normal window-close request at deadline. 145-second watchdog is diagnostic
+failure, never clean-exit acceptance. Physical menu launch uses real
+controls and upstream launcher. Each session owns config/logs/saves under its
+new run directory, with 640×480 output; existing owner saves stay separate.
+Saved probe also sets `SH3_INTERNAL_RESOLUTION=640x480`. This opt-in acceptance
+profile writes complete display defaults and requested render size into session
+copy of disp.ini. Native read-only PEEK verifies actual rendering dimensions;
+sh3.ini output alone does not establish Internal resolution. Normal physical
+launch leaves game graphics options available without this diagnostic override.
+Game entry follows reviewed Delver pattern: detached system service survives
+frontend's `KillMode=control-group`; per-run recovery marker arms before stop.
+Exit trap and privileged `ExecStopPost` restore frontend after exit or crash.
+Only frontend stopped by this session is restarted; unrelated helpers survive.
+Normal Ports entry starts asynchronously; saved SSH probe sets
+`SH3_SERVICE_WAIT=1` and waits for result and recovery. Service logs, cgroup,
+frontend state and before/during/after memory snapshots collect under `service/`.
+Saved probe also collects five-second CPU/GPU clock, thermal, memory and native
+process samples. Read-only monitor owns only its sleep child; neither monitor nor
+captures run during ordinary physical play. FPS/heap logging remains enabled.
+Select+Start closes game and upstream launcher through native SDL controls;
+neither button alone exits. Owner confirmed physical Select+Start return to Ports
+in run20261112T204903Z-230962. Normal game speed remains unpassed.
+Use normal Ports launch for physical movement/exit checks;
+do not treat scripted timing as performance evidence. Validate collected boot and
+close evidence with
+`SH3_GAME_EVIDENCE=r36s-dumps/sh3/<game-run-id> PYTHONPATH=tests python3 -m unittest test_game_evidence.GameSessionEvidenceTests -v`.
+Service evidence:
+`SH3_GAME_SERVICE_EVIDENCE=r36s-dumps/sh3/<game-run-id> PYTHONPATH=tests python3 -m unittest test_game_evidence.FrontendSessionEvidenceTests -v`.
 
 Unattended SSH preflight sets `SH3_PREFLIGHT_HEADLESS=1`: reports errors in
 collected logs without starting PortMaster dialog over active frontend. Installed
@@ -129,6 +176,16 @@ Only `desktop_reference=PASS` may result; software never passes R36S hardware
 identity. Ordinary AArch64 game context defaults native GLES; explicit
 `SH3_GL_BACKEND=desktop` retains desktop comparison route.
 
+`python3 scripts/host/test-runtime.py --game` includes real owner-data boot,
+presentation sequence and virtual-controller exit checks in ARM64 Docker.
+`--checkpoint` extends desktop reference to 100-second opening sequence with
+sparse captures. `--seed-session <collected-session>` implies checkpoint mode and
+replays saved checkpoint at 640×480, matching device Load/movement schedule.
+Checkpoint mounts read-only; only fresh session copy receives writes. Review scene
+images against device capture and physical observations; timing alone cannot
+establish matched interactive state. These references never pass hardware
+acceptance by themselves.
+
 ## Launcher tests
 
 `python3 -m unittest discover -s tests -v` runs interpreted host fixtures through
@@ -155,3 +212,33 @@ frontend process preservation and absence of leftover runtime processes/mounts.
 `SH3_NATIVE_PHYSICAL_EVIDENCE=r36s-dumps/sh3/<inventory-run-id>` adds assertion over
 collected successful physical diagnostics menu log. Collect after owner observes
 frontend return using saved `inventory` command; no original game upload needed.
+
+## Timed checkpoint comparison
+
+`SH3_SEED_SESSION` optionally copies data.001/data.sys, available disp.ini/key.ini
+and sh3-progs.bin from collected session into new writable session before launch.
+Explicit files only; source save/config/cache unchanged. Detached service forwards
+seed/profile/PEEK settings through explicit allowlist. Default Ports launch still starts fresh.
+Empty disp.ini from physical run means exact lower menu settings are unavailable;
+do not assume recorded output resolution equals internal rendering resolution.
+
+Saved device game probe chooses latest successful checkpoint session, verifies
+source hashes after replay and records `device/checkpoint-probe.txt`. First replay
+has cold application shader-key cache; subsequent replay copies cache generated
+by prior replay and records warm state. This is not device power-cycle or vendor
+driver-cache reset. Native warm-cache count/build log supplies independent evidence.
+Validate collected checkpoint/image/input evidence with
+`SH3_CHECKPOINT_EVIDENCE=r36s-dumps/sh3/<game-run-id> PYTHONPATH=tests python3 -m unittest test_game_evidence.CheckpointGameEvidenceTests -v`.
+
+`python3 scripts/host/test-movement.py --seed r36s-dumps/sh3/<inventory>/device/previous-launches/<physical-run>/session`
+calibrates timed movement through real game in existing ARM64 Docker environment.
+Owner assets/checkpoint mount read-only. Read-only SH3_PEEK observes documented
+player coordinates, health and room, plus guest timer counters. Test-only SDL swap
+delay varies presentation cost; it never writes guest clocks. Reject runs that
+miss live checkpoint, fail to move, end before full input or compare different rooms. Retain private
+samples/logs/images under ignored `.port-cache/movement-tests/`.
+Calibrated comparison currently reproduces slow motion: same four-second input
+moves about40% as far with delayed presentation. Guest clock advances normally,
+but inherited simulation step caps at3 while elapsed ticks exceed3. Test remains
+intentionally RED; no game-timing patch applied. See issue #5 report; intended
+speed, collision/combat/animation checks and performance remain issue #9/later work.

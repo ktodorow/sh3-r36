@@ -69,9 +69,24 @@ static uint32_t wndproc;
 static int quit_posted;
 
 void rt_pump_events(void) {
+    static Uint64 started;
+    if (!started) started = SDL_GetTicks64();
+    const char *deadline = getenv("SH3_QUIT_AFTER");
+    if (deadline && !quit_posted) {
+        char *end;
+        double seconds = strtod(deadline, &end);
+        if (!*end && seconds > 0 && seconds <= 3600 && SDL_GetTicks64() - started >= seconds * 1000) {
+            rt_log("window close requested: probe deadline %.1f seconds", seconds);
+            quit_posted = 1;
+        }
+    }
     SDL_Event e;
     while (SDL_PollEvent(&e))
         if (e.type == SDL_QUIT) { rt_log("window closed"); quit_posted = 1; }
+    if (!quit_posted && dinput_quit_combo()) {
+        rt_log("window close requested: Select+Start");
+        quit_posted = 1;
+    }
 }
 
 WINAPI(LoadCursorA, "LoadCursorA", 2) { return 1; }
@@ -88,10 +103,19 @@ void rt_window_open(void) {
         gl_prepare_context();
         /* A scripted run (SH3_KEYS) stays off screen, unless SH3_SHOW is set to watch it: either way it
          * never reads the real keyboard. */
-        rt_window = SDL_CreateWindow("Silent Hill 3", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+        unsigned width = 1280, height = 720;
+        const char *output = getenv("SH3_OUTPUT_RESOLUTION");
+        unsigned w, h;
+        char extra;
+        if (output && sscanf(output, "%ux%u%c", &w, &h, &extra) == 2 &&
+            w >= 320 && h >= 240 && w <= 1920 && h <= 1440) width = w, height = h;
+        rt_window = SDL_CreateWindow("Silent Hill 3", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height,
                                      SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
                                          (getenv("SH3_KEYS") && !getenv("SH3_SHOW") ? SDL_WINDOW_HIDDEN : 0));
         if (!rt_window) rt_fatal("SDL_CreateWindow: %s", SDL_GetError());
+        int drawable_w, drawable_h;
+        SDL_GL_GetDrawableSize(rt_window, &drawable_w, &drawable_h);
+        rt_log("output: requested %ux%u drawable %dx%d", width, height, drawable_w, drawable_h);
     }
 }
 WINAPI(CreateWindowExA, "CreateWindowExA", 12) {

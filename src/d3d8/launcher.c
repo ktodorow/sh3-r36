@@ -26,7 +26,8 @@ static struct { Uint8 *pcm; Uint32 len; } snd[2];
 
 static void sound_init(void) {
     static const int ids[2] = {0, 3};  /* what the title menu plays on a move and a choice, at full volume as there */
-    FILE *f = fopen("data/sound/sd.afs", "rb");
+    char path[1024];
+    FILE *f = fopen(rt_path("data/sound/sd.afs", path, sizeof path), "rb");
     SDL_AudioSpec spec;
     uint32_t n, ent[2];
     for (int i = 0; f && i < 2; i++) {
@@ -247,6 +248,11 @@ static void ini_save(void) {
 enum { IN_NONE, IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT, IN_OK, IN_BACK };
 
 static int poll_input(void) {
+    SDL_PumpEvents();
+    if (dinput_quit_combo()) {
+        rt_log("launcher close requested: Select+Start");
+        exit(0);
+    }
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         switch (e.type) {

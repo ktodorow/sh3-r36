@@ -28,7 +28,7 @@ bash "$PAYLOAD/scripts/device/inventory.sh" "$PORT_ROOT" "$RUN_DIR" || exit 3
 awk 'length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\// {print}' "$RUN_DIR/libraries.txt" \
     > "$RUN_DIR/firmware-libraries-before.sha256"
 if [ "$ACTION" = inventory ]; then exit 0; fi
-if [ "$ACTION" != preflight ] && [ "$ACTION" != runtime ] && [ "$ACTION" != gles ]; then echo 'Unknown action' >&2; exit 3; fi
+case "$ACTION" in preflight|runtime|gles|game) ;; *) echo 'Unknown action' >&2; exit 3 ;; esac
 if [ ! -s "$PAYLOAD/reviewed-helpers.sha256" ] || \
     ! cmp -s "$PAYLOAD/reviewed-helpers.sha256" "$RUN_DIR/portmaster-files.sha256"; then
     echo 'Installed PortMaster helpers differ from reviewed inventory; refusing to source.' >&2
@@ -45,14 +45,17 @@ if [ -e "$PORT_ROOT/preflight" ] && [ ! -f "$PORT_ROOT/preflight/.sh3-preflight-
 fi
 mkdir -p "$PORT_ROOT/preflight/scripts/device" "$PORT_ROOT/preflight/ports" || exit 3
 cp "$PAYLOAD/scripts/device/check-data.sh" "$PORT_ROOT/preflight/scripts/device/" || exit 3
+cp "$PAYLOAD/scripts/device/monitor-game.sh" "$PORT_ROOT/preflight/scripts/device/" || exit 3
 cp "$PAYLOAD/scripts/required-data.txt" "$PORT_ROOT/preflight/scripts/" || exit 3
 cp "$PAYLOAD/ports/Silent Hill 3.sh" "$PORT_ROOT/preflight/ports/" || exit 3
+cp "$PAYLOAD/ports/game-session.sh" "$PAYLOAD/ports/restore-frontend.sh" "$PORT_ROOT/preflight/ports/" || exit 3
 touch "$PORT_ROOT/preflight/.sh3-preflight-owned" || exit 3
 cp "$PAYLOAD/ports/Silent Hill 3.sh" "$MENU" || exit 3
 chmod +x "$MENU" || exit 3
-if [ "$ACTION" = runtime ] || [ "$ACTION" = gles ]; then
+if [ "$ACTION" = runtime ] || [ "$ACTION" = gles ] || [ "$ACTION" = game ]; then
     bash "$PAYLOAD/scripts/device/runtime.sh" "$PORT_ROOT" "$RUN_ID" "$PAYLOAD" "$RUN_DIR" "$ACTION"
     exit $?
 fi
 # Launcher owns its own new evidence directory; outer inventory remains preserved.
+if [ -f "$PAYLOAD/hash-data" ]; then export SH3_DATA_HASHES=1; fi
 SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_PREFLIGHT_HEADLESS=1 bash "$MENU"

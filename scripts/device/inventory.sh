@@ -53,6 +53,15 @@ probe() {
 } > "$RUN_DIR/libraries.txt" 2> "$RUN_DIR/libraries.stderr.txt"
 cat /proc/bus/input/devices > "$RUN_DIR/controllers.txt" 2> "$RUN_DIR/controllers.stderr.txt"
 ps -C emulationstation -o pid=,stat=,comm= > "$RUN_DIR/frontend-before.txt" 2>/dev/null || true
+{
+    probe systemd systemctl --version
+    probe frontend-service systemctl show emulationstation.service \
+        -p Id -p LoadState -p ActiveState -p SubState -p MainPID -p ControlGroup -p KillMode -p Restart
+    printf '\n[probe-cgroup]\n'
+    cat "/proc/$$/cgroup"
+    probe detached-launcher command -v systemd-run
+    probe noninteractive-privilege sudo -n true
+} > "$RUN_DIR/frontend-service.txt" 2> "$RUN_DIR/frontend-service.stderr.txt"
 awk -v root="$PORT_ROOT" 'index($2,root)==1 {print}' /proc/mounts > "$RUN_DIR/port-mounts-before.txt"
 : > "$RUN_DIR/portmaster-files.sha256"
 for pm in /opt/system/Tools/PortMaster /opt/tools/PortMaster \
@@ -87,5 +96,21 @@ for record in "$PORT_ROOT"/runs/*/run-id.txt; do
     for name in run-id.txt stdout.txt stderr.txt data.stderr.txt exit-status.txt; do
         [ ! -f "$launch/$name" ] || cp -p "$launch/$name" "$dest/" || exit 3
     done
+    # Display preferences and first checkpoint for replay; never recurse into assets.
+    for name in sh3.ini savedata/disp.ini savedata/data.001 savedata/data.sys; do
+        if [ -f "$launch/session/$name" ]; then
+            mkdir -p "$dest/session/$(dirname "$name")" || exit 3
+            cp -p "$launch/session/$name" "$dest/session/$name" || exit 3
+        fi
+    done
+    service="${launch}-service"
+    if [ -f "$service/exit-status.txt" ]; then
+        mkdir -p "$dest/service" || exit 3
+        for name in stdout.txt stderr.txt exit-status.txt cgroup.txt frontend-game.txt \
+            frontend-restored.txt memory-before.txt memory-game.txt memory-restored.txt \
+            performance.txt performance.stderr.txt frontend-stopped; do
+            [ ! -f "$service/$name" ] || cp -p "$service/$name" "$dest/service/" || exit 3
+        done
+    fi
 done
 echo 'Target observations collected; active SDL backend and GLES operations untested.'

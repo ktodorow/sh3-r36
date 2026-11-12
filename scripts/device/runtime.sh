@@ -36,9 +36,63 @@ if [ "$MODE" = gles ]; then
     MENU="$(dirname "$PORT_ROOT")/Silent Hill 3 Graphics Diagnostics.sh"
     MARKER='# SH3 project graphics diagnostics menu;'
 fi
+if [ "$MODE" = game ]; then
+    MENU="$(dirname "$PORT_ROOT")/Silent Hill 3 Game.sh"
+    MARKER='# SH3 project game menu;'
+fi
 if [ -e "$MENU" ] && ! grep -q "^$MARKER" "$MENU"; then
     echo 'Existing runtime menu not project-owned; preserved.' >&2; exit 3
 fi
 cp "$PAYLOAD/ports/$(basename "$MENU")" "$MENU"
 chmod +x "$MENU"
+if [ "$MODE" = game ]; then
+    # Window-close probe; watchdog remains failure if game does not handle WM_QUIT.
+    export SH3_KEYS='2:Return+0.4,5:Return+0.4,10:Return+0.4,15:Return+0.4,20:Return+0.4,25:Return+0.4,30:Return+0.4,35:Return+0.4,40:Return+0.4,45:Return+0.4,50:Return+0.4,55:Return+0.4,75:Escape+0.4,85:S+3,90:E+2'
+    export SH3_INTERNAL_RESOLUTION=640x480
+    export SH3_PEEK='72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660,72C7F0,72C7F4,BCC630'
+    source_launch=''
+    for checkpoint in "$PORT_ROOT"/runs/*/session/savedata/data.001; do
+        candidate="$(dirname "$(dirname "$(dirname "$checkpoint")")")"
+        if [ -f "$checkpoint" ] && [ -f "$candidate/session/savedata/data.sys" ] &&
+            [ -f "$candidate/exit-status.txt" ] && [ "$(cat "$candidate/exit-status.txt")" = 0 ]; then
+            source_launch=$candidate
+        fi
+    done
+    if [ -n "$source_launch" ]; then
+        export SH3_SEED_SESSION="$RUN_DIR/checkpoint-seed"
+        mkdir -p "$SH3_SEED_SESSION/savedata"
+        : > "$RUN_DIR/checkpoint-source.sha256"
+        cache=cold
+        for name in savedata/data.001 savedata/data.sys savedata/disp.ini savedata/key.ini; do
+            if [ -f "$source_launch/session/$name" ]; then
+                sha256sum "$source_launch/session/$name" >> "$RUN_DIR/checkpoint-source.sha256"
+                cp -p "$source_launch/session/$name" "$SH3_SEED_SESSION/$name"
+            fi
+        done
+        if [ -f "$source_launch/checkpoint-replay.txt" ] && [ -f "$source_launch/session/sh3-progs.bin" ]; then
+            sha256sum "$source_launch/session/sh3-progs.bin" >> "$RUN_DIR/checkpoint-source.sha256"
+            cp -p "$source_launch/session/sh3-progs.bin" "$SH3_SEED_SESSION/sh3-progs.bin"
+            cache=warm
+        fi
+        printf 'source_launch=%s\nprogram_cache=%s\ninternal_resolution=640x480\n' \
+            "$(basename "$source_launch")" "$cache" > "$RUN_DIR/checkpoint-probe.txt"
+        export SH3_KEYS='10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,75:S+4'
+    fi
+    export SH3_STATS=1 SH3_GL_BACKEND=gles SH3_SHOW=1 SH3_QUIT_AFTER=100 SH3_MONITOR=1
+    printf 'keys=%s\nquit_after_seconds=%s\ncapture_every_frames=60\ncontinuous_capture=0\n' \
+        "$SH3_KEYS" "$SH3_QUIT_AFTER" > "$RUN_DIR/game-probe.txt"
+    # Sparse evidence, avoiding full framebuffer readback and SD write every frame.
+    unset SH3_PRESENT_DUMP
+    export SH3_SHOT="$PORT_ROOT/runs/${RUN_ID}-launch/shots" SH3_SHOT_EVERY=60
+    status=0
+    timeout --kill-after=5s 145s env SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_SERVICE_WAIT=1 \
+        SH3_PREFLIGHT_HEADLESS=1 bash "$MENU" || status=$?
+    if [ -n "$source_launch" ]; then
+        sha256sum -c "$RUN_DIR/checkpoint-source.sha256" > "$RUN_DIR/checkpoint-source-after.txt" || status=3
+        if [ "$status" -eq 0 ]; then
+            cp "$RUN_DIR/checkpoint-probe.txt" "$PORT_ROOT/runs/${RUN_ID}-launch/checkpoint-replay.txt"
+        fi
+    fi
+    exit "$status"
+fi
 SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_PREFLIGHT_HEADLESS=1 bash "$MENU"

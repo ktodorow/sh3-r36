@@ -39,6 +39,73 @@ class LauncherFixture(unittest.TestCase):
 
 
 class PreflightLauncherTests(LauncherFixture):
+    @unittest.skipUnless((REPO / "SILENT HILL 3/data").is_dir(), "requires owner game data")
+    def test_warm_checkpoint_reuses_program_cache_without_changing_source(self):
+        original = REPO / "SILENT HILL 3"
+        (self.data / "sh3.exe").symlink_to(original / "sh3.exe")
+        (self.data / "data").symlink_to(original / "data", target_is_directory=True)
+        seed = self.root / "checkpoint"
+        (seed / "savedata").mkdir(parents=True)
+        for name in ("data.001", "data.sys"):
+            (seed / "savedata" / name).write_text("checkpoint")
+        (seed / "sh3-progs.bin").write_bytes(b"previous program keys")
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\ncat sh3-progs.bin\nprintf changed > sh3-progs.bin\nexit 7\n')
+        runtime.chmod(0o755)
+        result = self.launch(SH3_MODE="game", SH3_SEED_SESSION=str(seed))
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn("previous program keys", result.stdout)
+        self.assertEqual((seed / "sh3-progs.bin").read_bytes(), b"previous program keys")
+
+    @unittest.skipUnless((REPO / "SILENT HILL 3/data").is_dir(), "requires owner game data")
+    def test_game_replays_checkpoint_in_fresh_session_without_changing_source(self):
+        original = REPO / "SILENT HILL 3"
+        (self.data / "sh3.exe").symlink_to(original / "sh3.exe")
+        (self.data / "data").symlink_to(original / "data", target_is_directory=True)
+        seed = self.root / "checkpoint/savedata"
+        seed.mkdir(parents=True)
+        (seed / "data.001").write_bytes(b"checkpoint one")
+        (seed / "data.sys").write_bytes(b"checkpoint index")
+        (seed / "unrelated.dat").write_bytes(b"leave behind")
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\ncat savedata/data.001 savedata/data.sys\n'
+                           'test ! -e savedata/unrelated.dat || exit 8\n'
+                           'printf changed > savedata/data.001\nexit 7\n')
+        runtime.chmod(0o755)
+        result = self.launch(SH3_MODE="game", SH3_SEED_SESSION=str(seed.parent))
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn("checkpoint onecheckpoint index", result.stdout)
+        self.assertEqual((seed / "data.001").read_bytes(), b"checkpoint one")
+        self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
+
+    @unittest.skipUnless((REPO / "SILENT HILL 3/data").is_dir(), "requires owner game data")
+    def test_game_failure_records_640x480_session_and_preserves_originals(self):
+        original = REPO / "SILENT HILL 3"
+        (self.data / "sh3.exe").symlink_to(original / "sh3.exe")
+        (self.data / "data").symlink_to(original / "data", target_is_directory=True)
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\nprintf "game cwd=%s\\n" "$PWD"\n'
+                           'cat sh3.ini\nprintf "game boot failed\\n" >&2\nexit 7\n')
+        runtime.chmod(0o755)
+        commands = self.root / "bin"
+        commands.mkdir()
+        # External filesystem operation unavailable on exFAT, as observed on R36S.
+        link = commands / "ln"
+        link.write_text('#!/bin/sh\necho "Operation not permitted" >&2\nexit 1\n')
+        link.chmod(0o755)
+        result = self.launch(SH3_MODE="game", PATH=f"{commands}:{os.environ['PATH']}")
+        run = self.port / "runs/fixture"
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn(f"game cwd={run / 'session'}", result.stdout)
+        self.assertIn("resolution=640x480", result.stdout)
+        self.assertIn("game boot failed", (run / "stderr.txt").read_text())
+        self.assertEqual((run / "exit-status.txt").read_text().strip(), "7")
+        self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
+        self.assertIn("frontend ready", result.stdout)
+
     def test_missing_executable_reports_actionable_error_and_preserves_save(self):
         result = self.launch()
         self.assertNotEqual(result.returncode, 0)
@@ -156,6 +223,18 @@ class PreflightLauncherTests(LauncherFixture):
         self.assertEqual(result.returncode, 2)
         self.assertIn("Missing or empty required data: data/movie/op.000",
                       result.stdout + result.stderr)
+
+    def test_requested_asset_identity_survives_failed_preflight_without_changing_data(self):
+        asset = self.data / "data/movie/op.000"
+        asset.parent.mkdir(parents=True)
+        asset.write_bytes(b"abc")
+        result = self.launch(SH3_DATA_HASHES="1")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("data-sha256\tdata/movie/op.000\t"
+                      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                      result.stdout)
+        self.assertEqual(asset.read_bytes(), b"abc")
+        self.assertIn("frontend ready", result.stdout)
 
     def test_portmaster_setup_failure_is_distinct_from_game_data_failure(self):
         (self.pm / "control.txt").write_text(

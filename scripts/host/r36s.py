@@ -18,8 +18,10 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 FILES = ["scripts/device/inventory.sh", "scripts/device/run.sh",
          "scripts/device/check-data.sh", "scripts/device/runtime.sh", "scripts/required-data.txt",
+         "scripts/device/monitor-game.sh",
          "ports/Silent Hill 3.sh", "ports/Silent Hill 3 Runtime Diagnostics.sh",
-         "ports/Silent Hill 3 Graphics Diagnostics.sh"]
+         "ports/Silent Hill 3 Graphics Diagnostics.sh", "ports/Silent Hill 3 Game.sh",
+         "ports/game-session.sh", "ports/restore-frontend.sh"]
 
 
 def config():
@@ -46,10 +48,13 @@ def check_ignores():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["inventory", "preflight", "runtime", "gles"])
+    parser.add_argument("action", choices=["inventory", "preflight", "runtime", "gles", "game"])
     parser.add_argument("--reviewed-helpers", type=Path,
                         help="Prior collected inventory directory whose helpers were reviewed")
+    parser.add_argument("--hash-data", action="store_true", help="Record complete asset SHA-256 identities during preflight")
     args = parser.parse_args()
+    if args.hash_data and args.action != "preflight":
+        parser.error("--hash-data requires preflight action")
     check_ignores()
     cfg = config()
     port = cfg.get("R36S_PORT", "")
@@ -62,14 +67,14 @@ def main():
     if not tcp.isdigit() or not 1 <= int(tcp) <= 65535:
         raise ValueError("Invalid R36S_SSH_PORT")
     review = None
-    if args.action in {"preflight", "runtime", "gles"}:
+    if args.action in {"preflight", "runtime", "gles", "game"}:
         if not args.reviewed_helpers:
             raise ValueError("Run inventory and review helpers before preflight")
         review = (args.reviewed_helpers / "device" / "portmaster-files.sha256").read_bytes()
         if not review.strip():
             raise ValueError("Reviewed inventory has no PortMaster helpers")
     runtime_files = []
-    if args.action in {"runtime", "gles"}:
+    if args.action in {"runtime", "gles", "game"}:
         package = ROOT / "dist/runtime"
         binary = (package / "sh3").read_bytes()
         if binary[:6] != b"\x7fELF\x02\x01" or int.from_bytes(binary[18:20], "little") != 183:
@@ -137,7 +142,8 @@ def main():
     save("source-identity.json", json.dumps({"base_commit": commit, "files": identity}, indent=2) + "\n")
     data_root = Path(cfg.get("SH3_GAME_DIR") or ROOT / "SILENT HILL 3").expanduser()
     result = subprocess.run(["bash", str(ROOT / "scripts/device/check-data.sh"), str(data_root)],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True,
+                            env={**os.environ, "SH3_DATA_HASHES": "1" if args.hash_data else "0"})
     save("local-data.stdout.txt", result.stdout)
     save("local-data.stderr.txt", result.stderr)
     statuses["local-data"] = result.returncode
@@ -156,6 +162,8 @@ def main():
                     (runtime / name).write_bytes((ROOT / "dist/runtime" / name).read_bytes())
             if review:
                 (payload / "reviewed-helpers.sha256").write_bytes(review)
+            if args.hash_data:
+                (payload / "hash-data").touch()
             code = ssh("prepare", "mkdir -p " + shlex.quote(f"/roms2/ports/{port}/runs") +
                        " && mkdir " + shlex.quote(remote))
             if code == 0:
@@ -164,7 +172,8 @@ def main():
             if code == 0:
                 script = shlex.join(["bash", remote_payload + "/scripts/device/run.sh",
                                      args.action, f"/roms2/ports/{port}", run_id, remote_payload])
-                statuses["execution"] = ssh("execute", script, timeout=120)
+                execution_limit = 600 if args.hash_data else 180 if args.action == "game" else 120
+                statuses["execution"] = ssh("execute", script, timeout=execution_limit)
             else:
                 statuses["execution"] = "deployment-failed"
     finally:
@@ -172,16 +181,21 @@ def main():
         statuses["collection"] = command(
             "collect", ["scp", *options, "-P", tcp, "-r", host + ":" + remote + "/",
                         str(out / "device")], timeout=120)
-        if args.action in {"preflight", "runtime", "gles"}:
+        if args.action in {"preflight", "runtime", "gles", "game"}:
             statuses["launcher-collection"] = command(
                 "collect-launcher", ["scp", *options, "-P", tcp, "-r",
                                      host + ":" + remote + "-launch/", str(out / "launcher")], timeout=120)
+        if args.action == "game":
+            statuses["service-collection"] = command(
+                "collect-service", ["scp", *options, "-P", tcp, "-r",
+                                    host + ":" + remote + "-launch-service/", str(out / "service")], timeout=120)
         save("status.json", json.dumps(statuses, indent=2) + "\n")
     print("Evidence:", out.relative_to(ROOT))
     print("Local data:", statuses["local-data"], "Execution:", statuses["execution"],
           "Collection:", statuses["collection"])
     return 0 if (statuses["execution"] == 0 and statuses["collection"] == 0 and
-                 statuses.get("launcher-collection", 0) == 0) else 1
+                 statuses.get("launcher-collection", 0) == 0 and
+                 statuses.get("service-collection", 0) == 0) else 1
 
 
 if __name__ == "__main__":

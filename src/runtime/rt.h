@@ -70,6 +70,7 @@ int rt_format(char *out, size_t n, const char *fmt, uint32_t args);
 /* user32.c */
 extern struct SDL_Window *rt_window;
 void rt_pump_events(void);
+int dinput_quit_combo(void);
 void rt_window_open(void);
 
 /* kernel32.c */

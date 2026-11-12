@@ -313,8 +313,12 @@ static void capture_present(const char *path, int w, int h) {
     FILE *file = fopen(path, "wb");
     if (!file) rt_fatal("cannot record presentation capture");
     fprintf(file, "P6\n%d %d\n255\n", w, h);
-    for (int y = h - 1; y >= 0; y--)
-        for (int x = 0; x < w; x++) fwrite(px + ((size_t)y * w + x) * 4, 1, 3, file);
+    for (size_t i = 0; i < (size_t)w * h; i++) {
+        px[i * 3] = px[i * 4];
+        px[i * 3 + 1] = px[i * 4 + 1];
+        px[i * 3 + 2] = px[i * 4 + 2];
+    }
+    for (int y = h - 1; y >= 0; y--) fwrite(px + (size_t)y * w * 3, 3, w, file);
     int failed = ferror(file);
     failed |= fclose(file) != 0;
     free(px);
@@ -341,16 +345,14 @@ METHOD(dev_Present, 5) {
     rt_frame++;
     /* debugging: SH3_SHOT=dir writes frames 0-9, then every SH3_SHOT_EVERY-th (30), as PPM */
     const char *shot = getenv("SH3_SHOT"), *every = getenv("SH3_SHOT_EVERY");
-    if (shot && (frame++ < 10 || frame % (every ? atoi(every) : 30) == 1)) {
+    int interval = every ? atoi(every) : 30;
+    if (interval < 1) interval = 30;
+    if (shot && (frame < 10 || frame % interval == 0)) {
         char path[512];
-        snprintf(path, sizeof path, "%s/frame%05d.ppm", shot, frame - 1);
-        uint8_t *px = malloc(bb->w * bb->h * 3);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, bb->w, bb->h, GL_RGB, GL_UNSIGNED_BYTE, px);
-        FILE *f = fopen(path, "wb");
-        if (f) { fprintf(f, "P6 %u %u 255\n", bb->w, bb->h); fwrite(px, 3, bb->w * bb->h, f); fclose(f); }
-        free(px);
+        snprintf(path, sizeof path, "%s/frame%05d.ppm", shot, frame);
+        capture_present(path, ww, wh);
     }
+    frame++;
     const char *present_dump = getenv("SH3_PRESENT_DUMP");
     if (present_dump) capture_present(present_dump, ww, wh);
     SDL_GL_SwapWindow(rt_window);

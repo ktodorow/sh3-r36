@@ -19,6 +19,12 @@ static SDL_GameController *get_pad(void) {
     return pad;
 }
 
+int dinput_quit_combo(void) {
+    SDL_GameController *controller = get_pad();
+    return controller && SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_BACK) &&
+           SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_START);
+}
+
 static void fill_instance(uint32_t di, int kind) {
     memset(GPTR(di), 0, 580);
     MEM32(di) = 580;

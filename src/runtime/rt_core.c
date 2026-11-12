@@ -481,7 +481,8 @@ static void read_ini(void) {
 /* Once the launcher is done (src/d3d8/launcher.c): its settings, the exe and the game's own setup. */
 void rt_game_setup(void) {
     read_ini();
-    load_exe("sh3.exe");
+    char input[1024];
+    load_exe(rt_path("sh3.exe", input, sizeof input));
     game_init();
     if (cover_from >= 0) cover = calloc((g_xbox_code_hi - g_xbox_code_lo) / 8 + 1, 1);
 }

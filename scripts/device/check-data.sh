@@ -45,6 +45,19 @@ while IFS= read -r path; do
         [ "$status" -ne 0 ] || status=2
     else
         printf "data-file\t%s\t%s\n" "$path" "$(wc -c < "$DATA_DIR/$path" | tr -d ' ')"
+        if [ "${SH3_DATA_HASHES:-0}" = 1 ]; then
+            if command -v sha256sum >/dev/null; then
+                digest=$(sha256sum "$DATA_DIR/$path")
+            elif command -v shasum >/dev/null; then
+                digest=$(shasum -a 256 "$DATA_DIR/$path")
+            else
+                echo 'SHA-256 tool missing; data identity cannot be recorded.' >&2
+                exit 3
+            fi
+            hash_status=$?
+            [ "$hash_status" -eq 0 ] || exit 3
+            printf 'data-sha256\t%s\t%s\n' "$path" "${digest%% *}"
+        fi
     fi
 done < "$manifest"
 [ "$status" -ne 0 ] || echo "Supported executable and required-data paths verified; gameplay remains untested."
