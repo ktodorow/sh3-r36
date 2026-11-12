@@ -145,7 +145,19 @@ Conversation settled personal-device-first scope, Full port completeness, origin
 
 ### Baseline and unresolved facts
 
-Reviewed SH3 baseline: `ff483a6f95b94a4f7924f6fbe4cb47169f2adb98`. Expected owner executable: 3,338,240 bytes; SHA-1 `aa2aca6dba19bf510c9c2e92eefdc15e98266581`. Original data is roughly 5 GB. Research found local executable/generated game code unavailable; availability must be rechecked through approved workflow.
+Reviewed SH3 baseline: `ff483a6f95b94a4f7924f6fbe4cb47169f2adb98`. Upstream reference executable: 3,338,240 bytes; SHA-1 `aa2aca6dba19bf510c9c2e92eefdc15e98266581`. Original data is roughly 5 GB. Initial research found local executable/generated game code unavailable; availability must be rechecked through approved workflow.
+
+Owner input update, 2026-11-12: user supplied original-CD installation with
+3,338,240-byte `sh3.exe`, SHA-1 `d851669ef609b3164e3581aa8dcfbfaec866cb79`, and
+requested targeting this executable because alternative unavailable. Recognize
+exact `owner-cd-d851669e` input profile alongside upstream `upstream-aa2aca6d`.
+Local checks passed all nine upstream patch preconditions and PE/import parser;
+all 79 required data paths present. This establishes preflight input recognition,
+not equivalence to upstream executable or native-runtime compatibility. Generate
+native game code from selected profile and retain its hash in build identity;
+validate address-specific hooks and generated code during runtime work. Do not
+reuse generated code from another profile or accept arbitrary hashes. Preserve
+original; patches operate on ignored working copy. See [issue #1 evidence](../../reports/issue-01-preflight.md).
 
 Historical Delver evidence recorded owner's Mali-G31 native GLES3.2 on earlier dArkOS configuration. It does not establish current driver extensions, SH3 runtime compatibility, physical RAM fit, or SH3 frame rate. Original SH3 movie codec/container remains unidentified. Thread/audio races, compressed-texture fallbacks, later campaign recompiler faults, and thermal behavior remain empirical risks. Numeric tolerance for rare transition stalls remains open before final performance sign-off.
 
