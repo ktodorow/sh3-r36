@@ -5,6 +5,8 @@
 #include "d3d8.h"
 #include <SDL2/SDL.h>
 #include <math.h>
+#include <errno.h>
+#include <unistd.h>
 
 #define FADE_MS 700  /* every screen fades in and out */
 #define CW 1280
@@ -213,14 +215,15 @@ static void ini_load(void) {
 
 /* Rewrites the changed keys in place (the last line that sets each, as that's the one the game ends up
  * with) and appends the ones the file lacks; comments and every other line stay as they are. */
-static void ini_save(void) {
+static int ini_error;
+
+static int ini_save(void) {
     char *lines[512];
     int n = 0;
     FILE *f = fopen("sh3.ini", "r");
     char line[256], val[32];
     while (f && n < 512 && fgets(line, sizeof line, f)) lines[n++] = strdup(line);
     if (f) fclose(f);
-    if (!(f = fopen("sh3.ini", "w"))) { rt_log("launcher: can't write sh3.ini"); return; }
     for (int i = 0; i < N_OPTS; i++) {
         Opt *o = &opts[i];
         if (o->cur == o->was) continue;
@@ -237,10 +240,28 @@ static void ini_save(void) {
             }
             lines[n++] = strdup(set);
         }
-        o->was = o->cur;
     }
-    for (int j = 0; j < n; j++) { fputs(lines[j], f); free(lines[j]); }
-    fclose(f);
+    char temp[] = ".sh3-options-XXXXXX";
+    int fd = mkstemp(temp), error = 0;
+    f = fd < 0 ? NULL : fdopen(fd, "w");
+    if (!f) {
+        error = errno;
+        if (fd >= 0) close(fd);
+    }
+    for (int j = 0; j < n; j++) {
+        if (!error && fputs(lines[j], f) == EOF) error = errno ? errno : EIO;
+        free(lines[j]);
+    }
+    if (f) {
+        if (!error && (fflush(f) || fsync(fileno(f)))) error = errno;
+        if (fclose(f) && !error) error = errno;
+    }
+    if (!error && rename(temp, "sh3.ini")) error = errno;
+    unlink(temp);
+    ini_error = error;
+    if (error) rt_log("launcher: cannot save sh3.ini: %s; previous settings kept", strerror(error));
+    else for (int i = 0; i < N_OPTS; i++) opts[i].was = opts[i].cur;
+    return !error;
 }
 
 /* ---- input ---- */
@@ -330,6 +351,7 @@ static void draw_options(int sel) {
         text(CW - 140 - text_w(36, v), y, 36, c, v);
     }
     text_c(690, 24, C_DIM, "Left/Right: change   B: back (saves sh3.ini)");
+    if (ini_error) text_c(620, 28, C_SEL, "Cannot save sh3.ini; previous settings kept");
 }
 
 /* Fades the canvas in from black, or out to black, then leaves it as it was. Input meanwhile is dropped. */
@@ -367,7 +389,7 @@ static void options(void) {
             o->cur = o->cur < 0 ? 0 : (o->cur + (in == IN_LEFT ? n - 1 : 1)) % n;
         }
         if (in == IN_BACK || (!o && in == IN_OK)) {
-            ini_save();
+            if (!ini_save()) continue;
             fade(0);
             return;
         }

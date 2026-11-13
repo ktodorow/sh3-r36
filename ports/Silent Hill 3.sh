@@ -77,9 +77,50 @@ main() {
             echo 'Native runtime missing; install Docker-built ARM64 game package.' >&2
             return 3
         fi
-        # Session owns config, saves and logs; owner inputs remain separate.
-        local session="$RUN_DIR/session"
-        mkdir "$session" || return 3
+        # Ordinary play keeps state across launches; diagnostic replays stay isolated.
+        local session="$PORT_ROOT/state"
+        if [ "${SH3_SESSION_ISOLATED:-0}" = 1 ] || [ -n "${SH3_SEED_SESSION:-}" ]; then
+            session="$RUN_DIR/session"
+        fi
+        state_failure() {
+            local message="Cannot use save/settings folder: $1. Existing files preserved."
+            echo "$message" >&2
+            if [ "${SH3_PREFLIGHT_HEADLESS:-0}" != 1 ] && declare -F pm_message >/dev/null; then
+                pm_message "$message"
+            fi
+            return 3
+        }
+        if [ -n "${SH3_IMPORT_SESSION:-}" ]; then
+            if [ "$session" != "$PORT_ROOT/state" ] || [ -e "$session" ] || [ -L "$session" ]; then
+                state_failure 'import requires an absent player-state folder and ordinary game mode'
+                return 3
+            fi
+            if [ ! -d "$SH3_IMPORT_SESSION/savedata" ]; then
+                state_failure 'selected import has no savedata folder'
+                return 3
+            fi
+            local stage="$RUN_DIR/state-init" path
+            mkdir -p "$stage/savedata" || { state_failure 'cannot prepare import'; return 3; }
+            for path in "$SH3_IMPORT_SESSION"/savedata/data.[0-9][0-9][0-9] \
+                "$SH3_IMPORT_SESSION"/savedata/data.sys "$SH3_IMPORT_SESSION"/savedata/disp.ini \
+                "$SH3_IMPORT_SESSION"/savedata/key.ini "$SH3_IMPORT_SESSION"/sh3.ini \
+                "$SH3_IMPORT_SESSION"/sh3-progs.bin; do
+                [ -f "$path" ] || continue
+                local target="$stage/$(basename "$path")"
+                case "$path" in "$SH3_IMPORT_SESSION"/savedata/*) target="$stage/savedata/$(basename "$path")" ;; esac
+                if ! cp -p "$path" "$target" || ! chmod u+rw "$target"; then
+                    state_failure 'cannot copy selected import; check free space and write access'
+                    return 3
+                fi
+            done
+            mv "$stage" "$session" || { state_failure 'cannot install imported state'; return 3; }
+            echo 'Imported prior saves and preferences; source preserved.'
+        fi
+        if [ -L "$session" ] || ! mkdir -p "$session"; then
+            state_failure 'check conflicting files, free space and write access'
+            return 3
+        fi
+        printf 'state: %s\n' "$session"
         if [ -n "${SH3_SEED_SESSION:-}" ]; then
             for name in data.001 data.sys; do
                 [ -f "$SH3_SEED_SESSION/savedata/$name" ] || {
@@ -115,7 +156,9 @@ main() {
             printf 'resolution=640x480\n' >> "$display.new" || return 3
             mv "$display.new" "$display" || return 3
         fi
-        printf 'resolution=640x480\ncores=3\n' > "$session/sh3.ini" || return 3
+        if [ ! -e "$session/sh3.ini" ]; then
+            printf 'resolution=640x480\ncores=3\n' > "$session/sh3.ini" || return 3
+        fi
         export SH3_DATA_DIR="$DATA_DIR"
         export SH3_OUTPUT_RESOLUTION=640x480
         export SDL_GAMECONTROLLERCONFIG="${sdl_controllerconfig:-}"
@@ -124,7 +167,16 @@ main() {
         fi
         cd "$session" || return 3
         "$PORT_ROOT/runtime/sh3" "$session"
-        return $?
+        status=$?
+        if [ "$session" != "$RUN_DIR/session" ]; then
+            mkdir "$RUN_DIR/session" || return 3
+            for name in savedata sh3.ini sh3-progs.bin sh3-crash.log; do
+                if [ -e "$session/$name" ]; then
+                    cp -Rp "$session/$name" "$RUN_DIR/session/$name" || return 3
+                fi
+            done
+        fi
+        return "$status"
     fi
     return "$status"
 }

@@ -44,8 +44,9 @@ execution failure; distinguish unavailable device from validation failure.
 Inventory includes completed menu-run logs under `device/previous-launches/`,
 so physical menu tests can be collected through same unattended host command.
 Completed detached game sessions also include per-session service recovery logs.
-Explicit sh3.ini, savedata/disp.ini, data.001 and data.sys copies preserve display
-preferences and first checkpoint for replay; source sessions remain untouched.
+Explicit sh3.ini, savedata/disp.ini, key.ini, every three-digit data slot and
+data.sys copies preserve player state; source sessions remain untouched.
+Inventory also copies current persistent state/cache and records Linux boot ID.
 
 Scripts live in `scripts/host/` and `scripts/device/`; launcher lives in `ports/`.
 Only reviewed project files and explicit native package files deploy. Original
@@ -68,8 +69,10 @@ uses opening-sequence keys. Captures initial frames then one every 60 frames for
 stationary scene comparison; physical menu launch has no image capture. Game receives
 normal window-close request at deadline. 145-second watchdog is diagnostic
 failure, never clean-exit acceptance. Physical menu launch uses real
-controls and upstream launcher. Each session owns config/logs/saves under its
-new run directory, with 640×480 output; existing owner saves stay separate.
+controls and upstream launcher. Diagnostic probes own config/logs/saves under
+new run directory. Ordinary play uses persistent `sh3/state/`, with 640×480
+output; existing owner saves stay separate. Every ordinary launch snapshots
+state into its completed run directory without changing prior snapshots.
 Saved probe also sets `SH3_INTERNAL_RESOLUTION=640x480`. This opt-in acceptance
 profile writes complete display defaults and requested render size into session
 copy of disp.ini. Native read-only PEEK verifies actual rendering dimensions;
@@ -235,8 +238,13 @@ frontend return using saved `inventory` command; no original game upload needed.
 `SH3_SEED_SESSION` optionally copies data.001/data.sys, available disp.ini/key.ini
 and sh3-progs.bin from collected session into new writable session before launch.
 Explicit files only; source save/config/cache unchanged. Detached service forwards
-seed/profile/PEEK settings through explicit allowlist. Default Ports launch still starts fresh.
-Empty disp.ini from physical run means exact lower menu settings are unavailable;
+seed/profile/PEEK settings through explicit allowlist. Default Ports launch reuses
+player state; diagnostics explicitly request isolated sessions. Native writes
+replace save files after successful flush/close; failed replacement keeps prior
+file and logs error. Empty startup disp.ini marker preserves last valid settings.
+Native Options stages sh3.ini similarly; failed save keeps Options open with
+visible error and leaves prior preferences intact.
+Empty disp.ini from older physical run means exact lower menu settings are unavailable;
 do not assume recorded output resolution equals internal rendering resolution.
 
 Saved device game probe chooses latest successful checkpoint session, verifies
@@ -313,3 +321,39 @@ firmware, and final run must exit through physical Select+Start. Example paired
 runs and completed matrix in [issue #7 report](../reports/issue-07-controls.md).
 This asserts input delivery and lifecycle; actual game-action results still need
 owner observations. Missing inputs or final deadline exit leave check failing.
+
+## Persistent save/settings check (task #8)
+
+Use reviewed inventory and current native package. First use can copy an explicit
+collected session into absent `/roms2/ports/sh3/state/`:
+
+```sh
+python3 scripts/host/r36s.py game --persistent-state --import-session r36s-dumps/sh3/<inventory>/device/previous-launches/<run>/session --reviewed-helpers r36s-dumps/sh3/<inventory>
+```
+
+Copies all three-digit savedata slots, data.sys, disp.ini, key.ini, sh3.ini and
+program cache; ignores unrelated files. Records source hashes and verifies source
+unchanged after run. Import refuses existing player state; later checks omit
+`--import-session`. Source sessions/assets remain untouched. This mode implies
+physical controls, clears diagnostic seed/resolution overrides and uses ordinary
+player state. Normal Ports entry uses same state without host connection.
+
+Check graphics independently: change rendering resolution in game Options,
+choose Exit, confirm Yes, then close with Select+Start. Relaunch and inspect same
+Options value; no progression save needed. Also verify selected value after
+power cycle. Native launcher Options uses separate sh3.ini preferences.
+
+For progress, cross room boundary, save to spare slot and check available preview.
+Exit with Select+Start; collect inventory before power cycle. Power off/on, launch
+**Silent Hill 3 Game**, load saved slot, check room/progress/available preview,
+then exit. Collect another inventory; different boot IDs establish device restart.
+Record unavailable preview behavior explicitly rather than assuming thumbnail
+exists. Owner accepts room/play-time identification on tested Load screen for
+task #8. To check custom mappings, open Options → Button Config, use R1 to reach
+page2, select Dash, confirm with A, then click L3. Dash should show btn11. Choose
+Exit/Yes, close with Select+Start, power off/on, reopen same page and inspect
+mapping. Optional restore: assign Dash to X, then Exit/Yes. Collect inventory
+after exit; inspect key.ini, new boot ID, saved-state hashes and frontend return.
+Launcher snapshots preserve
+each run separately. Docker failure injection proves native failure path only;
+actual device round trip remains required.

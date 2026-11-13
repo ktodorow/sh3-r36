@@ -73,6 +73,9 @@ void rt_pump_events(void);
 int dinput_quit_combo(void);
 void rt_window_open(void);
 
+/* game/sh3.c: flush confirmed display choices before a native quit. */
+void game_save_display_settings(void);
+
 /* kernel32.c */
 void rt_thread_init_main(uint32_t stack_size);
 /* Runs fn(arg) on a new host thread that has its own guest registers, stack and TIB, so fn can guest_call. */

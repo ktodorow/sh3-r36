@@ -1,4 +1,5 @@
 """Installed game menu lifecycle; service manager is external fixture boundary."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -110,12 +111,78 @@ exit 7
         self.assertTrue(any("ExecStopPost=" in arg for arg in request), "crash recovery required")
         self.assertFalse(list(self.port.glob("runs/*/frontend-stopped")))
 
+    def test_saved_persistent_workflow_imports_player_slots_instead_of_diagnostic_seed(self):
+        payload = self.root / "payload"
+        (payload / "runtime").mkdir(parents=True)
+        (payload / "ports").mkdir()
+        source = payload / "import-state/savedata"
+        source.mkdir(parents=True)
+        (source / "data.001").write_bytes(b"player first slot")
+        (source / "data.002").write_bytes(b"player second slot")
+        (source / "data.sys").write_bytes(b"player index")
+        (payload / "persistent-state").touch()
+        (payload / "physical-controls").touch()
+        shutil.copyfile(REPO / "ports/Silent Hill 3 Game.sh", payload / "ports/Silent Hill 3 Game.sh")
+        runtime = payload / "runtime/sh3"
+        runtime.write_text('#!/bin/sh\ncat savedata/data.002\nexit 7\n')
+        (payload / "runtime/artifacts.sha256").write_text(hashlib.sha256(runtime.read_bytes()).hexdigest() + '  sh3\n')
+        (self.port / "runtime/.sh3-runtime-owned").touch()
+        previous = self.port / "runs/old/session/savedata"
+        previous.mkdir(parents=True)
+        (previous / "data.001").write_bytes(b"diagnostic checkpoint")
+        (previous / "data.sys").write_bytes(b"diagnostic index")
+        (previous.parent.parent / "exit-status.txt").write_text("0\n")
+        for name in ["readelf", "ldd"]:
+            self.write_command(name, '#!/bin/sh\nexit 0\n')
+        pgrep = self.commands / "pgrep"
+        pgrep.write_text(pgrep.read_text().replace('root=', '[ "$2" = sh3 ] && exit 1\nroot=', 1))
+        run = self.port / "runs/deploy"
+        run.mkdir()
+        result = subprocess.run(["bash", str(REPO / "scripts/device/runtime.sh"), str(self.port),
+                                 "deploy", str(payload), str(run), "game"],
+                                capture_output=True, text=True, timeout=20,
+                                env={**os.environ, "PATH": f"{self.commands}:{os.environ['PATH']}",
+                                     "XDG_DATA_HOME": str(self.root / "xdg"), "SH3_PACKAGE_DIR": str(REPO)})
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn("player second slot", (self.port / "runs/deploy-launch/stdout.txt").read_text())
+        self.assertEqual((self.port / "state/savedata/data.002").read_bytes(), b"player second slot")
+        self.assertEqual((source / "data.001").read_bytes(), b"player first slot")
+        self.assertEqual((previous / "data.001").read_bytes(), b"diagnostic checkpoint")
+        self.assertEqual(self.state.read_text(), "active")
+
     def test_previously_inactive_frontend_is_left_inactive(self):
         self.state.write_text("inactive")
         result = self.launch_menu()
         self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
         self.assertEqual(self.trace.read_text().splitlines(), ["runtime"])
         self.assertEqual(self.state.read_text(), "inactive")
+
+    def test_inventory_collects_every_owned_save_slot_and_current_state_without_changing_sources(self):
+        previous = self.port / "runs/completed"
+        state = self.port / "state"
+        contents = {"savedata/data.000": b"quick", "savedata/data.001": b"first",
+                    "savedata/data.002": b"second", "savedata/data.sys": b"index",
+                    "savedata/key.ini": b"mapping", "sh3.ini": b"cores=1\n"}
+        for base in [previous / "session", state]:
+            (base / "savedata").mkdir(parents=True)
+            for name, value in contents.items():
+                (base / name).write_bytes(value)
+        (state / "sh3-progs.bin").write_bytes(b"warm cache")
+        (previous / "run-id.txt").write_text("completed\n")
+        (previous / "exit-status.txt").write_text("0\n")
+        out = self.root / "inventory"
+        result = subprocess.run(["bash", str(REPO / "scripts/device/inventory.sh"), str(self.port), str(out)],
+                                capture_output=True, text=True, timeout=20,
+                                env={**os.environ, "PATH": f"{self.commands}:{os.environ['PATH']}",
+                                     "XDG_DATA_HOME": str(self.root / "xdg")})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name, value in contents.items():
+            self.assertEqual((out / "previous-launches/completed/session" / name).read_bytes(), value)
+            self.assertEqual((out / "persistent-state" / name).read_bytes(), value)
+            self.assertEqual((previous / "session" / name).read_bytes(), value)
+            self.assertEqual((state / name).read_bytes(), value)
+        self.assertEqual((out / "persistent-state/sh3-progs.bin").read_bytes(), b"warm cache")
+        self.assertRegex((out / "boot-id.txt").read_text(), r"^[0-9a-f-]{36}\n$")
 
     def test_opt_in_input_trace_reaches_detached_runtime(self):
         runtime = self.port / "runtime/sh3"

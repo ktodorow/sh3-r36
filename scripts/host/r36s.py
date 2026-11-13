@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -59,7 +60,15 @@ def main():
     parser.add_argument("--seed-session", type=Path, help="Copy explicit checkpoint into isolated scene session")
     parser.add_argument("--physical-controls", action="store_true",
                         help="Run handheld input check through game menu, without scripted keys or captures")
+    parser.add_argument("--persistent-state", action="store_true",
+                        help="Run physical check with ordinary persistent player state")
+    parser.add_argument("--import-session", type=Path,
+                        help="Copy collected player state on first persistent launch only")
     args = parser.parse_args()
+    if args.persistent_state:
+        args.physical_controls = True
+    if args.import_session and not args.persistent_state:
+        parser.error("--import-session requires --persistent-state")
     if args.hash_data and args.action != "preflight":
         parser.error("--hash-data requires preflight action")
     if args.physical_controls and (args.action != "game" or args.scene or args.seed_session):
@@ -75,6 +84,16 @@ def main():
         for name in ("savedata/data.001", "savedata/data.sys"):
             if not (args.seed_session / name).is_file():
                 parser.error("Missing collected checkpoint files")
+    imported = {}
+    if args.import_session:
+        args.import_session = args.import_session.resolve()
+        names = ["sh3.ini", "sh3-progs.bin", "savedata/data.sys", "savedata/disp.ini", "savedata/key.ini"]
+        names += [str(p.relative_to(args.import_session)) for p in
+                  sorted((args.import_session / "savedata").glob("data.[0-9][0-9][0-9]"))]
+        imported = {name: hashlib.sha256((args.import_session / name).read_bytes()).hexdigest()
+                    for name in names if (args.import_session / name).is_file()}
+        if "savedata/data.sys" not in imported or not any(re.fullmatch(r"savedata/data\.\d{3}", n) for n in imported):
+            parser.error("Import requires collected save slot and data.sys")
     check_ignores()
     cfg = config()
     port = cfg.get("R36S_PORT", "")
@@ -117,6 +136,8 @@ def main():
                 "collection": "not-attempted"}
     if args.physical_controls:
         statuses["physical_controls"] = True
+    if args.persistent_state:
+        statuses["persistent_state"] = True
     private = [v for k, v in cfg.items() if v and
                (k in {"R36S_HOST", "R36S_SSH_PASSWORD", "SH3_GAME_DIR"} or k.startswith("REFERENCE_"))]
     # SSH errors usually omit user@ prefix; redact endpoint components as well.
@@ -165,6 +186,8 @@ def main():
         identity[name] = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     save("source-identity.json", json.dumps({"base_commit": commit, "files": identity}, indent=2) + "\n")
+    if imported:
+        save("import-identity.json", json.dumps({"files": imported}, indent=2) + "\n")
     data_root = Path(cfg.get("SH3_GAME_DIR") or ROOT / "SILENT HILL 3").expanduser()
     result = subprocess.run(["bash", str(ROOT / "scripts/device/check-data.sh"), str(data_root)],
                             capture_output=True, text=True,
@@ -191,6 +214,12 @@ def main():
                 (payload / "hash-data").touch()
             if args.physical_controls:
                 (payload / "physical-controls").touch()
+            if args.persistent_state:
+                (payload / "persistent-state").touch()
+            for name in imported:
+                dest = payload / "import-state" / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(args.import_session / name, dest)
             if scene:
                 (payload / "scene-plan.json").write_text(json.dumps(scene["plan"], indent=2) + "\n")
                 if args.seed_session:
@@ -231,6 +260,10 @@ def main():
             scene["source_preserved"] = not args.seed_session or seed_hashes(args.seed_session) == scene["seed_sha256"]
             (out / "scene-identity.json").write_text(json.dumps(scene, indent=2) + "\n")
             statuses["source-preserved"] = scene["source_preserved"]
+        if imported:
+            statuses["source-preserved"] = all((args.import_session / name).is_file() and
+                hashlib.sha256((args.import_session / name).read_bytes()).hexdigest() == digest
+                for name, digest in imported.items())
         save("status.json", json.dumps(statuses, indent=2) + "\n")
     print("Evidence:", out.relative_to(ROOT))
     print("Local data:", statuses["local-data"], "Execution:", statuses["execution"],

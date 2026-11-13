@@ -17,6 +17,26 @@ probe() {
         printf 'missing-tool=%s\n' "$1"
     fi
 }
+copy_state() {
+    local source=$1 destination=$2 path relative
+    for path in "$source/sh3.ini" "$source/savedata/disp.ini" "$source/savedata/key.ini" \
+        "$source/savedata/data.sys" "$source"/savedata/data.[0-9][0-9][0-9]; do
+        [ -f "$path" ] || continue
+        relative=${path#"$source/"}
+        mkdir -p "$destination/$(dirname "$relative")" || return 3
+        cp -p "$path" "$destination/$relative" || return 3
+        sha256sum "$path" >> "$destination/source.sha256" || return 3
+    done
+}
+if [ -r /proc/sys/kernel/random/boot_id ]; then
+    cat /proc/sys/kernel/random/boot_id > "$RUN_DIR/boot-id.txt"
+fi
+copy_state "$PORT_ROOT/state" "$RUN_DIR/persistent-state" || exit 3
+if [ -f "$PORT_ROOT/state/sh3-progs.bin" ]; then
+    mkdir -p "$RUN_DIR/persistent-state" || exit 3
+    cp -p "$PORT_ROOT/state/sh3-progs.bin" "$RUN_DIR/persistent-state/" || exit 3
+    sha256sum "$PORT_ROOT/state/sh3-progs.bin" >> "$RUN_DIR/persistent-state/source.sha256" || exit 3
+fi
 {
     probe kernel uname -srvm
     probe machine uname -m
@@ -109,13 +129,8 @@ for record in "$PORT_ROOT"/runs/*/run-id.txt; do
     for name in run-id.txt stdout.txt stderr.txt data.stderr.txt exit-status.txt; do
         [ ! -f "$launch/$name" ] || cp -p "$launch/$name" "$dest/" || exit 3
     done
-    # Display preferences and first checkpoint for replay; never recurse into assets.
-    for name in sh3.ini savedata/disp.ini savedata/data.001 savedata/data.sys; do
-        if [ -f "$launch/session/$name" ]; then
-            mkdir -p "$dest/session/$(dirname "$name")" || exit 3
-            cp -p "$launch/session/$name" "$dest/session/$name" || exit 3
-        fi
-    done
+    # All game slots and preferences, including quicksave; never recurse into assets.
+    copy_state "$launch/session" "$dest/session" || exit 3
     service="${launch}-service"
     if [ -f "$service/exit-status.txt" ]; then
         mkdir -p "$dest/service" || exit 3

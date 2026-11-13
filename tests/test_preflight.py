@@ -8,6 +8,7 @@ import unittest
 
 
 REPO = Path(__file__).resolve().parents[1]
+OWNER = Path(os.environ.get("SH3_GAME_DATA", REPO / "SILENT HILL 3"))
 
 
 class LauncherFixture(unittest.TestCase):
@@ -39,9 +40,87 @@ class LauncherFixture(unittest.TestCase):
 
 
 class PreflightLauncherTests(LauncherFixture):
-    @unittest.skipUnless((REPO / "SILENT HILL 3/data").is_dir(), "requires owner game data")
+    @unittest.skipUnless((OWNER / "data").is_dir(), "requires owner game data")
+    def test_first_launch_imports_all_prior_slots_and_preferences_without_changing_source(self):
+        (self.data / "sh3.exe").symlink_to(OWNER / "sh3.exe")
+        (self.data / "data").symlink_to(OWNER / "data", target_is_directory=True)
+        seed = self.root / "prior-session"
+        (seed / "savedata").mkdir(parents=True)
+        prior = {"savedata/data.001": b"first slot", "savedata/data.002": b"second slot",
+                 "savedata/data.sys": b"save index", "savedata/key.ini": b"custom mapping",
+                 "savedata/disp.ini": b"resolution=640x480\n", "sh3.ini": b"cores=1\n",
+                 "sh3-progs.bin": b"warm programs", "savedata/unrelated.dat": b"other data"}
+        for name, value in prior.items():
+            (seed / name).write_bytes(value)
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\ncat savedata/data.001 savedata/data.002 savedata/key.ini sh3.ini sh3-progs.bin\n'
+                           'test ! -e savedata/unrelated.dat || exit 8\n'
+                           'printf "updated slot" > savedata/data.002\nexit 7\n')
+        runtime.chmod(0o755)
+        first = self.launch(SH3_MODE="game", SH3_IMPORT_SESSION=str(seed), SH3_RUN_ID="import")
+        self.assertEqual(first.returncode, 7, first.stderr)
+        self.assertIn("first slotsecond slotcustom mappingcores=1\nwarm programs", first.stdout)
+        second = self.launch(SH3_MODE="game", SH3_RUN_ID="resume")
+        self.assertEqual(second.returncode, 7, second.stderr)
+        self.assertIn("first slotupdated slotcustom mappingcores=1\nwarm programs", second.stdout)
+        conflict = self.launch(SH3_MODE="game", SH3_IMPORT_SESSION=str(seed), SH3_RUN_ID="conflict")
+        self.assertEqual(conflict.returncode, 3, conflict.stderr)
+        self.assertIn("import requires an absent player-state folder", conflict.stderr)
+        self.assertEqual((self.port / "state/savedata/data.002").read_bytes(), b"updated slot")
+        self.assertEqual({name: (seed / name).read_bytes() for name in prior}, prior)
+        self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
+
+    @unittest.skipUnless((OWNER / "data").is_dir(), "requires owner game data")
+    def test_unavailable_save_folder_reports_player_error_before_starting_game(self):
+        original = OWNER
+        (self.data / "sh3.exe").symlink_to(original / "sh3.exe")
+        (self.data / "data").symlink_to(original / "data", target_is_directory=True)
+        state = self.port / "state"
+        state.write_bytes(b"existing file must survive")
+        control = self.pm / "control.txt"
+        control.write_text(control.read_text() + 'pm_message() { printf "player error: %s\\n" "$1"; }\n')
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\necho "runtime started"\nexit 7\n')
+        runtime.chmod(0o755)
+        result = self.launch(SH3_MODE="game")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("Cannot use save/settings folder", result.stderr)
+        self.assertIn("player error: Cannot use save/settings folder", result.stdout)
+        self.assertIn("frontend ready", result.stdout)
+        self.assertNotIn("runtime started", result.stdout)
+        self.assertEqual(state.read_bytes(), b"existing file must survive")
+        self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
+
+    @unittest.skipUnless((OWNER / "data").is_dir(), "requires owner game data")
+    def test_failed_game_restart_keeps_player_state_and_separate_failure_logs(self):
+        original = OWNER
+        (self.data / "sh3.exe").symlink_to(original / "sh3.exe")
+        (self.data / "data").symlink_to(original / "data", target_is_directory=True)
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\nmkdir -p savedata\n'
+                           'printf "prior valid progress" > savedata/data.001\n'
+                           'printf "mapped controls" > savedata/key.ini\n'
+                           'printf "resolution=640x480\\ncores=1\\n" > sh3.ini\n'
+                           'echo "first runtime failure" >&2\nexit 7\n')
+        runtime.chmod(0o755)
+        first = self.launch(SH3_MODE="game", SH3_RUN_ID="first")
+        self.assertEqual(first.returncode, 7, first.stderr)
+        runtime.write_text('#!/bin/sh\ncat savedata/data.001 savedata/key.ini sh3.ini\n'
+                           'echo "second runtime failure" >&2\nexit 7\n')
+        second = self.launch(SH3_MODE="game", SH3_RUN_ID="second")
+        self.assertEqual(second.returncode, 7, second.stderr)
+        self.assertIn("prior valid progressmapped controlsresolution=640x480\ncores=1", second.stdout)
+        self.assertIn("first runtime failure", (self.port / "runs/first/stderr.txt").read_text())
+        self.assertNotIn("second runtime failure", (self.port / "runs/first/stderr.txt").read_text())
+        self.assertIn("frontend ready", second.stdout)
+        self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
+
+    @unittest.skipUnless((OWNER / "data").is_dir(), "requires owner game data")
     def test_warm_checkpoint_reuses_program_cache_without_changing_source(self):
-        original = REPO / "SILENT HILL 3"
+        original = OWNER
         (self.data / "sh3.exe").symlink_to(original / "sh3.exe")
         (self.data / "data").symlink_to(original / "data", target_is_directory=True)
         seed = self.root / "checkpoint"
@@ -58,9 +137,9 @@ class PreflightLauncherTests(LauncherFixture):
         self.assertIn("previous program keys", result.stdout)
         self.assertEqual((seed / "sh3-progs.bin").read_bytes(), b"previous program keys")
 
-    @unittest.skipUnless((REPO / "SILENT HILL 3/data").is_dir(), "requires owner game data")
+    @unittest.skipUnless((OWNER / "data").is_dir(), "requires owner game data")
     def test_game_replays_checkpoint_in_fresh_session_without_changing_source(self):
-        original = REPO / "SILENT HILL 3"
+        original = OWNER
         (self.data / "sh3.exe").symlink_to(original / "sh3.exe")
         (self.data / "data").symlink_to(original / "data", target_is_directory=True)
         seed = self.root / "checkpoint/savedata"
@@ -80,9 +159,9 @@ class PreflightLauncherTests(LauncherFixture):
         self.assertEqual((seed / "data.001").read_bytes(), b"checkpoint one")
         self.assertEqual(self.save.read_bytes(), b"owner save remains unchanged")
 
-    @unittest.skipUnless((REPO / "SILENT HILL 3/data").is_dir(), "requires owner game data")
+    @unittest.skipUnless((OWNER / "data").is_dir(), "requires owner game data")
     def test_game_failure_records_640x480_session_and_preserves_originals(self):
-        original = REPO / "SILENT HILL 3"
+        original = OWNER
         (self.data / "sh3.exe").symlink_to(original / "sh3.exe")
         (self.data / "data").symlink_to(original / "data", target_is_directory=True)
         runtime = self.port / "runtime/sh3"
@@ -96,7 +175,8 @@ class PreflightLauncherTests(LauncherFixture):
         link = commands / "ln"
         link.write_text('#!/bin/sh\necho "Operation not permitted" >&2\nexit 1\n')
         link.chmod(0o755)
-        result = self.launch(SH3_MODE="game", PATH=f"{commands}:{os.environ['PATH']}")
+        result = self.launch(SH3_MODE="game", SH3_SESSION_ISOLATED="1",
+                             PATH=f"{commands}:{os.environ['PATH']}")
         run = self.port / "runs/fixture"
         self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
         self.assertIn(f"game cwd={run / 'session'}", result.stdout)
@@ -204,10 +284,10 @@ class PreflightLauncherTests(LauncherFixture):
                       result.stdout + result.stderr)
         self.assertEqual(exe.stat().st_size, 3338240)
 
-    @unittest.skipUnless((REPO / "SILENT HILL 3/sh3.exe").is_file(), "requires owner CD executable")
+    @unittest.skipUnless((OWNER / "sh3.exe").is_file(), "requires owner CD executable")
     def test_owner_cd_executable_is_recognized_before_missing_assets_are_reported(self):
         # Real owner input stays ignored; no game bytes or hash mocks in fixtures.
-        original = REPO / "SILENT HILL 3/sh3.exe"
+        original = OWNER / "sh3.exe"
         before = original.read_bytes()
         shutil.copyfile(original, self.data / "sh3.exe")
         result = self.launch()

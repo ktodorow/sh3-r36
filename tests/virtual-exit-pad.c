@@ -35,6 +35,9 @@ int SDL_PollEvent(SDL_Event *event) {
         if (index >= 0 && SDL_IsGameController(index)) joystick = SDL_JoystickOpen(index);
         if (!joystick) { fprintf(stderr, "virtual pad failed: %s\n", SDL_GetError()); return poll_event(event); }
         started = SDL_GetTicks64();
+        const char *exit_after = getenv("SH3_TEST_EXIT_AFTER");
+        if (exit_after && atoi(exit_after) >= 5)
+            next = (Uint64)atoi(exit_after) * 1000 - 4000;  /* five preceding phase waits */
         fprintf(stderr, "virtual pad ready\n");
     }
     if (joystick) {

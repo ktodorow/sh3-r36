@@ -67,25 +67,26 @@ int rt_format(char *out, size_t n, const char *fmt, uint32_t args) {
 SDL_Window *rt_window;
 static uint32_t wndproc;
 static int quit_posted;
+static int close_requested;
 
 void rt_pump_events(void) {
     static Uint64 started;
     if (!started) started = SDL_GetTicks64();
     const char *deadline = getenv("SH3_QUIT_AFTER");
-    if (deadline && !quit_posted) {
+    if (deadline && !quit_posted && !close_requested) {
         char *end;
         double seconds = strtod(deadline, &end);
         if (!*end && seconds > 0 && seconds <= 3600 && SDL_GetTicks64() - started >= seconds * 1000) {
             rt_log("window close requested: probe deadline %.1f seconds", seconds);
-            quit_posted = 1;
+            close_requested = 1;
         }
     }
     SDL_Event e;
     while (SDL_PollEvent(&e))
-        if (e.type == SDL_QUIT) { rt_log("window closed"); quit_posted = 1; }
-    if (!quit_posted && dinput_quit_combo()) {
+        if (e.type == SDL_QUIT && !quit_posted && !close_requested) { rt_log("window closed"); close_requested = 1; }
+    if (!quit_posted && !close_requested && dinput_quit_combo()) {
         rt_log("window close requested: Select+Start");
-        quit_posted = 1;
+        close_requested = 1;
     }
 }
 
@@ -146,6 +147,13 @@ WINAPI(PostMessageA, "PostMessageA", 4) {
 }
 static int next_message(uint32_t m, int remove) {
     rt_pump_events();
+    if (close_requested && !quit_posted) {
+        /* Native exits bypass title-menu cleanup. Flush at message-loop boundary,
+         * outside presentation/input callbacks, before returning WM_QUIT. */
+        close_requested = 0;
+        game_save_display_settings();
+        quit_posted = 1;
+    }
     if (!n_posted && !quit_posted) return 0;
     memset(GPTR(m), 0, 28);
     if (n_posted) {

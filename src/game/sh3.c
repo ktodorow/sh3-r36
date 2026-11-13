@@ -106,6 +106,13 @@ void game_init(void) {
     memcpy(GPTR(0x7214E4), pad_defaults, sizeof pad_defaults);
 }
 
+/* Native window close / Select+Start bypass the title-menu exit, which calls
+ * this original serializer. It checks its own initialized flag (0xBCC5FD), so
+ * closing before display setup does not write uninitialized preferences. */
+void game_save_display_settings(void) {
+    guest_call(0x005F0A80u, 0, NULL, 0);
+}
+
 /* Indirect calls and the dispatch table reach the generated bodies (sub_X_gen) of wrapped functions: calls
  * by address are routed here first. */
 recomp_func_t recomp_lookup_manual(uint32_t va) {

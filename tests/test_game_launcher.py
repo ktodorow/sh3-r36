@@ -12,6 +12,117 @@ from test_preflight import LauncherFixture, REPO
 
 @unittest.skipUnless(os.environ.get("SH3_GAME_DATA"), "requires read-only owner data in ARM64 Docker")
 class GameLauncherTests(LauncherFixture):
+    def test_graphics_options_persist_without_saving_game_progress(self):
+        """Real Options -> 512x256 -> Exit/Yes -> Select+Start -> cold launch."""
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        shutil.copyfile(os.environ["SH3_RUNTIME_BINARY"], runtime)
+        runtime.chmod(0o755)
+        pad = self.root / "virtual-exit-pad.so"
+        subprocess.run(["cc", "-shared", "-fPIC", str(REPO / "tests/virtual-exit-pad.c"),
+                        "-o", str(pad), "-lSDL2", "-ldl"], check=True)
+        evidence = Path(os.environ["SH3_GAME_REFERENCE_OUT"]).parent / "game-graphics-options"
+        evidence.mkdir()
+        env = {**os.environ, "SH3_MODE": "game", "SH3_PORT_ROOT": str(self.port),
+               "SH3_DATA_DIR": os.environ["SH3_GAME_DATA"], "SH3_PACKAGE_DIR": str(REPO),
+               "XDG_DATA_HOME": str(self.root / "xdg"), "SH3_GL_BACKEND": "desktop",
+               "SDL_VIDEODRIVER": "offscreen", "SDL_AUDIODRIVER": "dummy",
+               "LIBGL_ALWAYS_SOFTWARE": "1", "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS": "1"}
+        menu = "10:Return+0.4,26:Down+0.2,28:Down+0.2,30:Return+0.4,33:D+0.2,36:D+0.2"
+        for run, seconds, keys in [
+            ("choose", 57, menu + ",39:S+0.2,41:Left+0.2,43:Up+0.2,45:Up+0.2,47:Return+0.2,52:Return+0.2"),
+            ("reload", 42, menu),
+        ]:
+            shots = evidence / run / "shots"
+            shots.mkdir(parents=True)
+            current = {**env, "SH3_RUN_ID": run, "SH3_KEYS": keys,
+                       "SH3_SHOT": str(shots), "SH3_SHOT_EVERY": "60"}
+            if run == "choose":
+                current.update(LD_PRELOAD=str(pad), SH3_TEST_EXIT_AFTER=str(seconds))
+                current.pop("SH3_QUIT_AFTER", None)
+            else:
+                current["SH3_QUIT_AFTER"] = str(seconds)
+            result = subprocess.run(["timeout", "--kill-after=3s", f"{seconds + 8}s", "bash",
+                                     str(REPO / "ports/Silent Hill 3.sh")],
+                                    env=current, capture_output=True, text=True, timeout=seconds + 20)
+            shutil.copytree(self.port / "runs" / run, evidence / run / "launcher")
+            self.assertEqual(result.returncode, 0, result.stderr[-8000:])
+            self.assertIn("frontend ready", result.stdout)
+            if run == "choose":
+                self.assertIn("window close requested: Select+Start", result.stderr)
+            display = self.port / "state/savedata/disp.ini"
+            self.assertTrue(display.is_file(), "confirmed game Options must create display preferences")
+            values = dict(line.split("=", 1) for line in display.read_text().splitlines() if "=" in line)
+            self.assertEqual(values.get("resolution"), "512x256",
+                             "confirmed rendering choice must survive clean exit and cold launch, without a save")
+            self.assertFalse(list((self.port / "state/savedata").glob("data.[0-9][0-9][0-9]")),
+                             "graphics preferences must persist independently of progression saves")
+
+    def test_failed_native_options_save_preserves_previous_preferences(self):
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        shutil.copyfile(os.environ["SH3_RUNTIME_BINARY"], runtime.with_name("native"))
+        runtime.with_name("native").chmod(0o755)
+        runtime.write_text('''#!/usr/bin/python3
+import os, resource, signal, subprocess, sys
+from pathlib import Path
+def limit_writes():
+    limit = int(os.environ.get('SH3_TEST_FILE_LIMIT', '0'))
+    if limit:
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+child = subprocess.Popen([str(Path(__file__).with_name('native')), *sys.argv[1:]],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, preexec_fn=limit_writes)
+for line in child.stdout:
+    sys.stderr.buffer.write(line)
+    sys.stderr.flush()
+sys.exit(child.wait())
+''')
+        runtime.chmod(0o755)
+        pad = self.root / "options-input.so"
+        subprocess.run(["cc", "-shared", "-fPIC", str(REPO / "tests/virtual-options-input.c"),
+                        "-o", str(pad), "-lSDL2", "-ldl"], check=True)
+        config = self.port / "state/sh3.ini"
+        config.parent.mkdir()
+        config.write_text("; user preferences\nresolution=640x480\ncores=3\n")
+        evidence = Path(os.environ["SH3_GAME_REFERENCE_OUT"]).parent / "native-options-failure"
+        evidence.mkdir()
+        for run, limit in [("options-saved", "0"), ("options-failed", "4")]:
+            result = self.launch(SH3_MODE="game", SH3_DATA_DIR=os.environ["SH3_GAME_DATA"],
+                                 SH3_RUN_ID=run, SH3_LAUNCHER="1", SH3_KEYS="",
+                                 SH3_GL_BACKEND="desktop", SDL_VIDEODRIVER="offscreen",
+                                 SDL_AUDIODRIVER="dummy", LIBGL_ALWAYS_SOFTWARE="1",
+                                 SH3_TEST_FILE_LIMIT=limit, LD_PRELOAD=str(pad))
+            shutil.copytree(self.port / "runs" / run, evidence / run)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr[-6000:])
+            self.assertIn("options fixture step=6", result.stderr)
+            self.assertEqual(config.read_text(), "; user preferences\nresolution=640x480\ncores=1\n",
+                             "failed option write must retain successful previous choice and comments")
+        self.assertIn("previous settings kept", result.stderr)
+        self.assertIn("File too large", result.stderr)
+
+    def test_game_exit_preserves_display_preferences_for_cold_restart(self):
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        shutil.copyfile(os.environ["SH3_RUNTIME_BINARY"], runtime)
+        runtime.chmod(0o755)
+        display = self.port / "state/savedata/disp.ini"
+        display.parent.mkdir(parents=True)
+        preferences = ("format=D3DFMT_A8R8G8B8\ngamma_b=1\ngamma_g=1\ngamma_r=0.875\n"
+                       "lensflare_ztest=1\nmode=fullscreen\nshadow=1\nsize=640x480\n"
+                       "resolution=640x480\n")
+        display.write_text(preferences)
+        result = self.launch(SH3_MODE="game", SH3_DATA_DIR=os.environ["SH3_GAME_DATA"],
+                             SH3_KEYS="", SH3_GL_BACKEND="desktop", SDL_VIDEODRIVER="offscreen",
+                             SDL_AUDIODRIVER="dummy", LIBGL_ALWAYS_SOFTWARE="1", SH3_QUIT_AFTER="6")
+        out = Path(os.environ["SH3_GAME_REFERENCE_OUT"]).parent / "display-persistence"
+        shutil.copytree(self.port / "runs/fixture", out)
+        self.assertEqual(result.returncode, 0, result.stderr[-8000:])
+        self.assertIn("frontend ready", result.stdout)
+        self.assertIn("gamma_r=0.875", display.read_text(),
+                      "normal port exit must retain last valid display preferences")
+        self.assertIn("resolution=640x480", display.read_text())
+
     def test_input_trace_observes_button_mapped_digital_triggers_through_real_game(self):
         self.check_exit_combo(scripted=True, input_matrix=True)
 

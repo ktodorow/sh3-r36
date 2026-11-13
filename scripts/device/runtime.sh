@@ -47,6 +47,8 @@ cp "$PAYLOAD/ports/$(basename "$MENU")" "$MENU"
 chmod +x "$MENU"
 if [ "$MODE" = game ]; then
     # Window-close probe; watchdog remains failure if game does not handle WM_QUIT.
+    export SH3_SESSION_ISOLATED=1
+    unset SH3_IMPORT_SESSION SH3_SEED_SESSION
     export SH3_KEYS='2:Return+0.4,5:Return+0.4,10:Return+0.4,15:Return+0.4,20:Return+0.4,25:Return+0.4,30:Return+0.4,35:Return+0.4,40:Return+0.4,45:Return+0.4,50:Return+0.4,55:Return+0.4,75:Escape+0.4,85:S+3,90:E+2'
     export SH3_INTERNAL_RESOLUTION=640x480
     export SH3_PEEK='72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660,72C7F0,72C7F4,BCC630'
@@ -61,6 +63,13 @@ if [ "$MODE" = game ]; then
     # Explicit unseeded scene starts fresh instead of inheriting latest owner save.
     if [ -f "$PAYLOAD/scene-plan.json" ] && [ ! -d "$PAYLOAD/scene-seed" ]; then
         source_launch=''
+    fi
+    if [ -f "$PAYLOAD/persistent-state" ]; then
+        source_launch=''
+        unset SH3_SESSION_ISOLATED SH3_INTERNAL_RESOLUTION
+        if [ -d "$PAYLOAD/import-state" ]; then
+            export SH3_IMPORT_SESSION="$PAYLOAD/import-state"
+        fi
     fi
     source_session=${source_launch:+$source_launch/session}
     if [ -d "$PAYLOAD/scene-seed" ]; then
@@ -113,6 +122,11 @@ PY
         probe_limit=1000
         printf 'scripted_input=0\ninput_log=1\nframe_capture=0\nperformance_sampler=0\nquit_after_seconds=900\n' \
             > "$RUN_DIR/game-probe.txt"
+    fi
+    if [ -f "$PAYLOAD/persistent-state" ]; then
+        echo 'state_mode=persistent' >> "$RUN_DIR/game-probe.txt"
+    else
+        echo 'state_mode=isolated' >> "$RUN_DIR/game-probe.txt"
     fi
     # Sparse evidence, avoiding full framebuffer readback and SD write every frame.
     unset SH3_PRESENT_DUMP

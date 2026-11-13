@@ -87,6 +87,8 @@ typedef struct Obj {
     char pattern[256], dirpath[512];
     int dots;                          /* "." and ".." listed so far */
     uint32_t map_file;                 /* CreateFileMapping */
+    char *write_path, *write_temp;     /* retain valid saves until replacement is complete */
+    int write_error;
 } Obj;
 
 /* ponytail: one lock and one condition variable for every waitable object. Fine for a game's
@@ -115,10 +117,44 @@ static Obj *obj(uint32_t h) {
     return h >= 0x1000 && i < 4096 ? objs[i] : NULL;
 }
 
+static uint32_t file_error(int error) {
+    if (error == ENOSPC || error == EFBIG) return 112;  /* ERROR_DISK_FULL */
+    if (error == EACCES || error == EPERM) return 5;
+    if (error == EROFS) return 19;
+    if (error == ENOENT) return ERROR_FILE_NOT_FOUND;
+    return 1117;  /* ERROR_IO_DEVICE */
+}
+
+static int fail_file(Obj *o, int error) {
+    if (!o->write_error)
+        rt_log("save: cannot write %s: %s%s", o->write_path ? o->write_path : "file",
+               strerror(error), o->write_temp ? "; previous file kept" : "");
+    if (!o->write_error) o->write_error = error;
+    last_error = file_error(o->write_error);
+    return 0;
+}
+
+static int finish_file(Obj *o) {
+    if (!o->write_temp) { fclose(o->f); return 1; }
+    struct stat st = {0};
+    int error = o->write_error;
+    if (!error && (fflush(o->f) || fstat(fileno(o->f), &st))) error = errno;
+    if (!error && st.st_size && fsync(fileno(o->f))) error = errno;
+    if (fclose(o->f) && !error) error = errno;
+    /* The game's empty startup crash marker must not erase saved display preferences. */
+    int marker = !st.st_size && !strcasecmp(o->write_path, "savedata/disp.ini");
+    if (!error && !marker && rename(o->write_temp, o->write_path)) error = errno;
+    unlink(o->write_temp);
+    if (error) fail_file(o, error);
+    free(o->write_path);
+    free(o->write_temp);
+    return !error;
+}
+
 static int close_handle(uint32_t h) {
     Obj *o = obj(h);
     if (!o) return 0;
-    if (o->f) fclose(o->f);
+    int ok = !o->f || finish_file(o);
     if (o->dir) closedir(o->dir);
     if (o->type != H_THREAD) {  /* a running thread still uses its object */
         pthread_mutex_lock(&obj_mx);
@@ -126,7 +162,7 @@ static int close_handle(uint32_t h) {
         pthread_mutex_unlock(&obj_mx);
         free(o);
     }
-    return 1;
+    return ok;
 }
 WINAPI(CloseHandle, "CloseHandle", 1) { return close_handle(ARG(0)); }
 
@@ -630,8 +666,7 @@ static uint32_t open_file(const char *guest, uint32_t access, uint32_t dispositi
     int write = (access & 0x40000000u) != 0;  /* GENERIC_WRITE */
     struct stat st;
     int exists = stat(path, &st) == 0;
-    /* SH3 empties savedata/disp.ini at start and fills it on a clean exit; found empty, it means "crashed" and
-     * the game falls back to safe graphics. Leaving with HOME (or killing a test run) is not a crash. */
+    /* Empty legacy crash markers have no usable display preferences. */
     if (exists && !st.st_size && !write && !strcasecmp(path + (strlen(path) > 8 ? strlen(path) - 8 : 0), "disp.ini")) {
         last_error = ERROR_FILE_NOT_FOUND;
         return INVALID_HANDLE;
@@ -644,13 +679,24 @@ static uint32_t open_file(const char *guest, uint32_t access, uint32_t dispositi
     case 5: mode = "w+b"; break;                                                           /* TRUNCATE_EXISTING */
     }
     if (exists && S_ISDIR(st.st_mode)) { last_error = 5; return INVALID_HANDLE; }
-    FILE *f = fopen(path, mode);
+    int replace = write && (disposition == 2 || disposition == 5) && !strncasecmp(path, "savedata/", 9);
+    char temp[] = ".sh3-write-XXXXXX";
+    FILE *f;
+    if (replace) {
+        int fd = mkstemp(temp);
+        f = fd < 0 ? NULL : fdopen(fd, "w+b");
+        if (fd >= 0 && !f) { close(fd); unlink(temp); }
+    } else f = fopen(path, mode);
     if (rt_trace) rt_log("  open %s -> %s %s", guest, path, f ? "ok" : "FAILED");
     if (has_save(guest)) rt_log("save: open %s access %08X disposition %u -> %s", guest, access, disposition, f ? "ok" : "FAILED");
     if (!f && !write) rt_log("open: %s not found (%s)", guest, path);  /* the game's missing files */
-    if (!f) { last_error = ERROR_FILE_NOT_FOUND; return INVALID_HANDLE; }
+    if (!f) { last_error = file_error(errno); return INVALID_HANDLE; }
     uint32_t h = new_handle(H_FILE);
     obj(h)->f = f;
+    if (replace) {
+        obj(h)->write_path = strdup(path);
+        obj(h)->write_temp = strdup(temp);
+    }
     return h;
 }
 WINAPI(CreateFileA, "CreateFileA", 7) { return open_file(GSTR(ARG(0)), ARG(1), ARG(4)); }
@@ -670,7 +716,13 @@ static uint32_t file_io(int write) {
     if (ov) fseeko(o->f, MEM32(ov + 8) | (off_t)MEM32(ov + 12) << 32, SEEK_SET);
     off_t at = ftello(o->f);
     size_t n;
-    if (write) n = fwrite(GPTR(ARG(1)), 1, ARG(2), o->f);
+    int ok = 1;
+    if (write) {
+        errno = 0;
+        n = fwrite(GPTR(ARG(1)), 1, ARG(2), o->f);
+        if (n != ARG(2) || fflush(o->f) || ferror(o->f))
+            ok = fail_file(o, errno ? errno : EIO);
+    }
     else {
         /* Never ask fread for more than the file holds: at the end of the file the C library zeroed the front of
          * the destination buffer, and the game reads a save a second time at EOF (expecting 0 bytes and its
@@ -683,20 +735,21 @@ static uint32_t file_io(int write) {
         else if ((uint64_t)(end - at) < want) want = (size_t)(end - at);
         n = want ? fread(GPTR(ARG(1)), 1, want, o->f) : 0;
     }
-    if (write) fflush(o->f);
     if (ARG(3)) MEM32(ARG(3)) = (uint32_t)n;
     if (ov) {
-        MEM32(ov) = 0;
+        MEM32(ov) = ok ? 0 : last_error;
         MEM32(ov + 4) = (uint32_t)n;
         if (obj(MEM32(ov + 16))) signal_obj(obj(MEM32(ov + 16)), 1);
     }
-    return 1;
+    return ok;
 }
 WINAPI(ReadFile, "ReadFile", 5) { return file_io(0); }
 WINAPI(WriteFile, "WriteFile", 5) { return file_io(1); }
 WINAPI(GetOverlappedResult, "GetOverlappedResult", 4) {
     MEM32(ARG(2)) = MEM32(ARG(1) + 4);
-    return 1;
+    uint32_t error = MEM32(ARG(1));
+    if (error) last_error = error;
+    return !error;
 }
 WINAPI(SetFilePointer, "SetFilePointer", 4) {
     Obj *o = obj(ARG(0));
@@ -711,10 +764,15 @@ WINAPI(SetFilePointer, "SetFilePointer", 4) {
 WINAPI(SetEndOfFile, "SetEndOfFile", 1) {
     Obj *o = obj(ARG(0));
     if (!o || !o->f) return 0;
-    fflush(o->f);
-    return ftruncate(fileno(o->f), ftello(o->f)) == 0;
+    if (fflush(o->f) || ftruncate(fileno(o->f), ftello(o->f))) return fail_file(o, errno);
+    return !o->write_error;
 }
-WINAPI(FlushFileBuffers, "FlushFileBuffers", 1) { Obj *o = obj(ARG(0)); if (o && o->f) fflush(o->f); return 1; }
+WINAPI(FlushFileBuffers, "FlushFileBuffers", 1) {
+    Obj *o = obj(ARG(0));
+    if (!o || !o->f) { last_error = 6; return 0; }
+    if (fflush(o->f) || fsync(fileno(o->f))) return fail_file(o, errno);
+    return !o->write_error;
+}
 WINAPI(GetFileAttributesA, "GetFileAttributesA", 1) {
     char p[512];
     struct stat st;
