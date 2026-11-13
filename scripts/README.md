@@ -259,3 +259,57 @@ moves about40% as far with delayed presentation. Guest clock advances normally,
 but inherited simulation step caps at3 while elapsed ticks exceed3. Test remains
 intentionally RED; no game-timing patch applied. See issue #5 report; intended
 speed, collision/combat/animation checks and performance remain issue #9/later work.
+
+## Physical controls check
+
+Prepare native build and review current inventory helpers before run. Owner must
+be ready at handheld; command starts installed game menu and collects after exit:
+
+```sh
+python3 scripts/host/r36s.py game --physical-controls --reviewed-helpers r36s-dumps/sh3/<reviewed-inventory-run-id>
+```
+
+Uses `/roms2/ports/sh3`, latest successful checkpoint copied into fresh session,
+640×480 internal/output, firmware SDL/Mali and same detached game service. Sets
+`SH3_INPUT_LOG=1`; removes scripted keys, PEEK, captures and performance sampler.
+Physical mode unsets FPS/heap logging too; native stats flag checks presence.
+No key injection or keyboard step. Physical A advances warning screen and Play;
+load checkpoint with handheld controls. Standard Ports entry remains ordinary
+game launch; flag affects this run only.
+
+Game safety deadline900s; systemd service limit930s also covers waiting at launcher.
+Deadline or service stop does not pass physical exit. Finish with Select+Start
+and observe frontend return before deadline. Host execution limit1050s allows
+cleanup and separate result collection; all waits remain inside saved host script.
+
+Check left/right sticks in each direction, d-pad, A/B/X/Y, L1/R1, L2/R2, L3/R3,
+Start and Select alone, then Select+Start. Observe movement, camera, dash, action,
+weapon ready/attack/equip, search, flashlight, map, inventory, pause and confirm/
+cancel. Controls/default-action matrix and scene limits in
+[issue #7 report](../reports/issue-07-controls.md). Record actual printed-button
+conventions and unavailable actions explicitly. No saved-remapping pass implied.
+
+Evidence: `device/game-probe.txt` records physical mode; `service/physical-controls.txt`
+records applied launcher settings; `launcher/stderr.txt` records SDL mapping,
+changed six-axis/game-button/POV states and physical exit; service logs record
+frontend recovery. Logs prove input delivery; owner observations prove actions.
+Regular inventory now collects installed SDL database and EmulationStation input
+config under `device/input-configs/`. Validate current sources with:
+
+```sh
+SH3_INPUT_INVENTORY=r36s-dumps/sh3/<inventory-run-id> PYTHONPATH=tests python3 -m unittest test_input_evidence -v
+```
+
+After complete handheld checklist and physical exit, validate collected input
+set, digital-trigger values and frontend cleanup:
+
+```sh
+SH3_INPUT_SESSION_EVIDENCE=r36s-dumps/sh3/<physical-run-id> PYTHONPATH=tests python3 -m unittest test_input_evidence.InputSessionEvidenceTests -v
+```
+
+Multiple actual runs may be joined with `:` on this host; input coverage combines
+only identical runtime builds, every run must restore frontend and preserve
+firmware, and final run must exit through physical Select+Start. Example paired
+runs and completed matrix in [issue #7 report](../reports/issue-07-controls.md).
+This asserts input delivery and lifecycle; actual game-action results still need
+owner observations. Missing inputs or final deadline exit leave check failing.

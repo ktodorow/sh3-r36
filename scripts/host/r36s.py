@@ -57,9 +57,13 @@ def main():
     parser.add_argument("--hash-data", action="store_true", help="Record complete asset SHA-256 identities during preflight")
     parser.add_argument("--scene", choices=SCENES, help="Replay shared desktop/device scene plan")
     parser.add_argument("--seed-session", type=Path, help="Copy explicit checkpoint into isolated scene session")
+    parser.add_argument("--physical-controls", action="store_true",
+                        help="Run handheld input check through game menu, without scripted keys or captures")
     args = parser.parse_args()
     if args.hash_data and args.action != "preflight":
         parser.error("--hash-data requires preflight action")
+    if args.physical_controls and (args.action != "game" or args.scene or args.seed_session):
+        parser.error("--physical-controls requires game action without scene replay")
     if (args.scene or args.seed_session) and args.action != "game":
         parser.error("Scene replay requires game action")
     if args.seed_session and not args.scene:
@@ -111,6 +115,8 @@ def main():
     remote_payload = remote + "/payload"
     statuses = {"run_id": run_id, "action": args.action, "execution": "not-attempted",
                 "collection": "not-attempted"}
+    if args.physical_controls:
+        statuses["physical_controls"] = True
     private = [v for k, v in cfg.items() if v and
                (k in {"R36S_HOST", "R36S_SSH_PASSWORD", "SH3_GAME_DIR"} or k.startswith("REFERENCE_"))]
     # SSH errors usually omit user@ prefix; redact endpoint components as well.
@@ -183,6 +189,8 @@ def main():
                 (payload / "reviewed-helpers.sha256").write_bytes(review)
             if args.hash_data:
                 (payload / "hash-data").touch()
+            if args.physical_controls:
+                (payload / "physical-controls").touch()
             if scene:
                 (payload / "scene-plan.json").write_text(json.dumps(scene["plan"], indent=2) + "\n")
                 if args.seed_session:
@@ -201,6 +209,8 @@ def main():
                 execution_limit = 600 if args.hash_data else 180 if args.action == "game" else 120
                 if scene:
                     execution_limit = scene["plan"]["seconds"] + 100
+                if args.physical_controls:
+                    execution_limit = 1050
                 statuses["execution"] = ssh("execute", script, timeout=execution_limit)
             else:
                 statuses["execution"] = "deployment-failed"

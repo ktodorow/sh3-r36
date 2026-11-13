@@ -117,6 +117,32 @@ exit 7
         self.assertEqual(self.trace.read_text().splitlines(), ["runtime"])
         self.assertEqual(self.state.read_text(), "inactive")
 
+    def test_opt_in_input_trace_reaches_detached_runtime(self):
+        runtime = self.port / "runtime/sh3"
+        runtime.write_text(runtime.read_text().replace("exit 7", 'printf "input-log=%s\\n" "$SH3_INPUT_LOG"\nexit 7'))
+        with patch.dict(os.environ, {"SH3_INPUT_LOG": "1"}):
+            result = self.launch_menu()
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        log = (self.port / "runs/service-fixture/stdout.txt").read_text()
+        self.assertIn("input-log=1\n", log)
+        self.assertEqual(self.state.read_text(), "active")
+
+    def test_physical_controls_mode_removes_scripted_input_and_capture(self):
+        runtime = self.port / "runtime/sh3"
+        runtime.write_text(runtime.read_text().replace("exit 7", '''printf 'input-log=%s stats=%s backend=%s deadline=%s\\n' "$SH3_INPUT_LOG" "${SH3_STATS+set}" "$SH3_GL_BACKEND" "$SH3_QUIT_AFTER"
+printf 'keys=%s peek=%s shot=%s capture=%s dump=%s monitor=%s\\n' "${SH3_KEYS+set}" "${SH3_PEEK+set}" "${SH3_SHOT+set}" "${SH3_SHOT_EVERY+set}" "${SH3_PRESENT_DUMP+set}" "${SH3_MONITOR+set}"
+exit 7'''))
+        with patch.dict(os.environ, {"SH3_PHYSICAL_CONTROLS": "1", "SH3_KEYS": "1:Return",
+                                    "SH3_PEEK": "72D2C0", "SH3_SHOT": "/unused",
+                                    "SH3_SHOT_EVERY": "1", "SH3_PRESENT_DUMP": "/unused.ppm",
+                                    "SH3_MONITOR": "1", "SH3_STATS": "1"}):
+            result = self.launch_menu()
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        log = (self.port / "runs/service-fixture/stdout.txt").read_text()
+        self.assertIn("input-log=1 stats= backend=gles deadline=900\n", log)
+        self.assertIn("keys= peek= shot= capture= dump= monitor=\n", log)
+        self.assertEqual(self.state.read_text(), "active")
+
     def test_checkpoint_and_requested_render_profile_reach_detached_game(self):
         seed = self.root / "seed-session/savedata"
         seed.mkdir(parents=True)

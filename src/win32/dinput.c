@@ -12,10 +12,27 @@ enum { DEV_KEYBOARD = 1, DEV_MOUSE, DEV_PAD };
 
 static SDL_GameController *pad;
 
+static int input_log_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *value = getenv("SH3_INPUT_LOG");
+        enabled = value && !strcmp(value, "1");
+    }
+    return enabled;
+}
+
 static SDL_GameController *get_pad(void) {
     if (pad && !SDL_GameControllerGetAttached(pad)) { SDL_GameControllerClose(pad); pad = NULL; }
-    for (int i = 0; !pad && i < SDL_NumJoysticks(); i++)
-        if (SDL_IsGameController(i)) pad = SDL_GameControllerOpen(i);
+    for (int i = 0; !pad && i < SDL_NumJoysticks(); i++) {
+        if (SDL_IsGameController(i)) {
+            pad = SDL_GameControllerOpen(i);
+            if (pad && input_log_enabled()) {
+                char *mapping = SDL_GameControllerMapping(pad);
+                rt_log("input controller mapping=%s", mapping ? mapping : "unavailable");
+                SDL_free(mapping);
+            }
+        }
+    }
     return pad;
 }
 
@@ -354,6 +371,27 @@ static uint32_t pad_pov(SDL_GameController *c) {  /* hundredths of a degree cloc
     return (dx || dy) ? (uint32_t)pov[dy + 1][dx + 1] : 0xFFFFFFFFu;
 }
 
+/* Opt-in physical-input evidence. Quantize sticks only for change detection to avoid idle jitter logs. */
+static void trace_pad(SDL_GameController *c) {
+    static int previous[8], have_previous;
+    if (!c || !input_log_enabled()) return;
+    int state[8], changed = !have_previous;
+    for (int i = 0; i < 6; i++) state[i] = SDL_GameControllerGetAxis(c, (SDL_GameControllerAxis)i);
+    state[6] = 0;
+    for (int i = 0; i < 12; i++) state[6] |= pad_button(c, i) << i;
+    state[7] = (int32_t)pad_pov(c);
+    for (int i = 0; i < 8; i++) {
+        int value = i < 4 ? state[i] / 4096 : state[i];
+        if (previous[i] != value) changed = 1;
+        previous[i] = value;
+    }
+    if (changed)
+        rt_log("input state ticks=%llu axes=%d,%d,%d,%d,%d,%d buttons=%03x pov=%d",
+               (unsigned long long)SDL_GetTicks64(), state[0], state[1], state[2], state[3],
+               state[4], state[5], (unsigned)state[6], state[7]);
+    have_previous = 1;
+}
+
 /* Fills the state in the game's own DIDATAFORMAT: each DIOBJECTDATAFORMAT (pguid, dwOfs, dwType,
  * dwFlags) names an object by GUID and/or type and instance, and where its value goes. */
 static void pad_state(uint32_t dev, uint32_t out, uint32_t size) {
@@ -380,6 +418,7 @@ static void pad_state(uint32_t dev, uint32_t out, uint32_t size) {
         else if (kind == OBJ_BUTTON) *(uint8_t *)GPTR(out + ofs) = pad_button(c, inst) ? 0x80 : 0;
         else MEM32(out + ofs) = inst == 0 ? pad_pov(c) : 0xFFFFFFFFu;
     }
+    trace_pad(c);
 }
 
 /* Testing: SH3_KEYS="12:Return,14.5:Down,20:Up+8" holds each key for 150 ms (or +seconds) at that many

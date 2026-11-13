@@ -52,6 +52,15 @@ probe() {
     fi
 } > "$RUN_DIR/libraries.txt" 2> "$RUN_DIR/libraries.stderr.txt"
 cat /proc/bus/input/devices > "$RUN_DIR/controllers.txt" 2> "$RUN_DIR/controllers.stderr.txt"
+mkdir -p "$RUN_DIR/input-configs"
+input_index=0
+for path in "$HOME/.emulationstation/es_input.cfg" "$HOME/.config/emulationstation/es_input.cfg" \
+    /etc/emulationstation/es_input.cfg; do
+    if [ -f "$path" ]; then
+        cp -p "$path" "$RUN_DIR/input-configs/es-input-$input_index.cfg" || exit 3
+        input_index=$((input_index + 1))
+    fi
+done
 ps -C emulationstation -o pid=,stat=,comm= > "$RUN_DIR/frontend-before.txt" 2>/dev/null || true
 {
     probe systemd systemctl --version
@@ -67,6 +76,10 @@ awk -v root="$PORT_ROOT" 'index($2,root)==1 {print}' /proc/mounts > "$RUN_DIR/po
 for pm in /opt/system/Tools/PortMaster /opt/tools/PortMaster \
     "${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster" /roms2/ports/PortMaster /roms/ports/PortMaster; do
     [ -f "$pm/control.txt" ] || continue
+    if [ -f "$pm/gamecontrollerdb.txt" ]; then
+        mkdir -p "$RUN_DIR/input-configs/$(basename "$(dirname "$pm")")"
+        cp -p "$pm/gamecontrollerdb.txt" "$RUN_DIR/input-configs/$(basename "$(dirname "$pm")")/" || exit 3
+    fi
     # Preserve original paths in checksum record; copy only code/metadata, never settings/secrets.
     find -L "$pm" -maxdepth 1 -type f \( -name control.txt -o -name funcs.txt \
         -o -name 'mod_*.txt' -o -name device_info.txt -o -name mapper.txt \

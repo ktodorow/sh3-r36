@@ -12,10 +12,13 @@ from test_preflight import LauncherFixture, REPO
 
 @unittest.skipUnless(os.environ.get("SH3_GAME_DATA"), "requires read-only owner data in ARM64 Docker")
 class GameLauncherTests(LauncherFixture):
+    def test_input_trace_observes_button_mapped_digital_triggers_through_real_game(self):
+        self.check_exit_combo(scripted=True, input_matrix=True)
+
     def test_select_start_exits_actual_game_but_either_button_alone_does_not(self):
         self.check_exit_combo(scripted=True)
 
-    def check_exit_combo(self, scripted):
+    def check_exit_combo(self, scripted, input_matrix=False):
         runtime = self.port / "runtime/sh3"
         runtime.parent.mkdir()
         shutil.copyfile(os.environ["SH3_RUNTIME_BINARY"], runtime)
@@ -32,6 +35,8 @@ class GameLauncherTests(LauncherFixture):
         env.pop("SH3_QUIT_AFTER", None)
         if not scripted:
             env.pop("SH3_KEYS")
+        if input_matrix:
+            env.update(SH3_INPUT_LOG="1", SH3_TEST_INPUT_MATRIX="1")
         result = subprocess.run(["timeout", "--kill-after=3s", "9s", "bash",
                                  str(REPO / "ports/Silent Hill 3.sh")],
                                 env=env, capture_output=True, text=True, timeout=20)
@@ -44,6 +49,15 @@ class GameLauncherTests(LauncherFixture):
         else:
             self.assertNotIn("CreateDevice", logs, "combo must close launcher before starting game")
         self.assertIn("frontend ready", result.stdout)
+        if input_matrix:
+            self.assertRegex(logs, r"input controller mapping=.*lefttrigger:b6.*righttrigger:b7",
+                             "native trace must record applied SDL mapping")
+            self.assertRegex(logs, r"input state ticks=\d+ axes=0,0,0,0,32767,0 buttons=040 pov=-1",
+                             "digital L2 must reach game's search-view button")
+            self.assertRegex(logs, r"input state ticks=\d+ axes=0,0,0,0,0,32767 buttons=080 pov=-1",
+                             "digital R2 must reach game's ready-weapon button")
+        else:
+            self.assertNotIn("input state ticks=", logs, "ordinary launches must keep input trace disabled")
 
     def test_select_start_also_exits_upstream_launcher(self):
         self.check_exit_combo(scripted=False)

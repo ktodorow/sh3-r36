@@ -107,11 +107,18 @@ PY
     fi
     printf 'keys=%s\nquit_after_seconds=%s\ncapture_every_frames=%s\ncontinuous_capture=0\n' \
         "$SH3_KEYS" "$SH3_QUIT_AFTER" "$SH3_SHOT_EVERY" > "$RUN_DIR/game-probe.txt"
+    probe_limit=$((SH3_QUIT_AFTER + 45))
+    if [ -f "$PAYLOAD/physical-controls" ]; then
+        export SH3_PHYSICAL_CONTROLS=1
+        probe_limit=1000
+        printf 'scripted_input=0\ninput_log=1\nframe_capture=0\nperformance_sampler=0\nquit_after_seconds=900\n' \
+            > "$RUN_DIR/game-probe.txt"
+    fi
     # Sparse evidence, avoiding full framebuffer readback and SD write every frame.
     unset SH3_PRESENT_DUMP
     export SH3_SHOT="$PORT_ROOT/runs/${RUN_ID}-launch/shots"
     status=0
-    timeout --kill-after=5s "$((SH3_QUIT_AFTER + 45))s" env SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_SERVICE_WAIT=1 \
+    timeout --kill-after=5s "${probe_limit}s" env SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_SERVICE_WAIT=1 \
         SH3_PREFLIGHT_HEADLESS=1 bash "$MENU" || status=$?
     if [ -n "$source_launch" ]; then
         sha256sum -c "$RUN_DIR/checkpoint-source.sha256" > "$RUN_DIR/checkpoint-source-after.txt" || status=3
