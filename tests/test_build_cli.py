@@ -1,4 +1,5 @@
 """Saved host CLI boundary; Docker is external, fixtures never prove target runtime."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -48,6 +49,123 @@ class BuildCliTests(unittest.TestCase):
         self.assertEqual(json.loads((run / "build-inputs.json").read_text())["input_sha1"],
                          "d851669ef609b3164e3581aa8dcfbfaec866cb79")
         self.assertEqual(final.read_bytes(), b"previous final artifact")
+
+    def test_selected_optimization_survives_unavailable_docker_in_build_identity(self):
+        result = subprocess.run(["python3", str(self.root / "scripts/host/build.py"),
+                                 "--optimization", "O3"],
+                                cwd=self.root, env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 42, result.stderr)
+        runs = list((self.root / ".port-cache/builds").iterdir())
+        self.assertEqual(len(runs), 1)
+        identity = json.loads((runs[0] / "build-inputs.json").read_text())
+        self.assertEqual(identity.get("optimization"), "O3",
+                         "requested compiler variant lost from reproducible build identity")
+
+    @unittest.skipUnless(os.environ.get("SH3_REAL_BUILD_TESTS") == "1",
+                         "requires real Linux ARM64 Docker build")
+    def test_lto_variant_builds_real_artifact_and_can_restore_non_lto(self):
+        source = self.root / "src/runtime/host.c"
+        source.parent.mkdir(parents=True)
+        source.write_text('#include <limits.h>\n#include <stdio.h>\n'
+                          'extern int fold(int);\nint main(void) { volatile int n = INT_MAX; '
+                          'printf("%d %d\\n", fold(n), fold(6)); }\n')
+        (source.parent / "helper.c").write_text('int fold(int n) { return (n + 1) * 6; }\n')
+        (self.root / "CMakeLists.txt").write_text(
+            'cmake_minimum_required(VERSION 3.20)\nproject(lto_check C)\n'
+            'add_executable(sh3 src/runtime/host.c src/runtime/helper.c)\n'
+            'target_compile_options(sh3 PRIVATE -fwrapv -fno-strict-aliasing)\n')
+        # Keep production native build script; replace only external data generation.
+        shutil.copyfile(REPO / "scripts/build/native.sh", self.root / "scripts/build/native.sh")
+        generator = self.root / "tools/regen.sh"
+        generator.parent.mkdir()
+        generator.write_text('mkdir -p src/recomp/gen\nprintf "fixture\\n" > src/recomp/gen/input.txt\n')
+        (self.root / "scripts/build/shader-samples.py").write_text(
+            'from pathlib import Path\nimport sys\np = Path(sys.argv[2])\n'
+            'p.parent.mkdir(parents=True, exist_ok=True)\np.write_text("/* fixture */\\n")\n')
+        env = {**self.env, "PATH": os.environ["PATH"]}
+        image = "sh3-r36s-build:" + hashlib.sha256(
+            (self.root / "scripts/build/Dockerfile").read_bytes()).hexdigest()[:16]
+        for selected in (True, False):
+            result = subprocess.run(["python3", str(self.root / "scripts/host/build.py"),
+                                     "--optimization", "O3", *(["--lto"] if selected else [])],
+                                    cwd=self.root, env=env, capture_output=True, text=True, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            runs = sorted((self.root / ".port-cache/builds").iterdir())
+            identity = json.loads((runs[-1] / "build-inputs.json").read_text())
+            self.assertEqual(identity.get("lto"), selected)
+            commands = json.loads((self.root / "build/arm64/compile_commands.json").read_text())
+            for command in commands:
+                flags = command['command']
+                self.assertEqual('-flto=2' in flags, selected)
+                self.assertIn('-mcpu=cortex-a35', flags)
+                self.assertIn('-O3', flags)
+                self.assertIn('-fwrapv', flags)
+                self.assertIn('-fno-strict-aliasing', flags)
+                self.assertNotIn('-ffast-math', flags)
+            output = subprocess.check_output([
+                "docker", "run", "--rm", "--platform", "linux/arm64", "--network", "none",
+                "--mount", f"type=bind,src={self.root / 'dist/runtime'},dst=/artifact,readonly",
+                image, "/artifact/sh3"], text=True).strip()
+            self.assertEqual(output, '0 42', 'compiler variant changed signed-wrap example')
+            object_sections = subprocess.check_output([
+                "docker", "run", "--rm", "--platform", "linux/arm64", "--network", "none",
+                "--mount", f"type=bind,src={self.root / 'build/arm64'},dst=/compile,readonly",
+                image, "readelf", "-SW", "/compile/CMakeFiles/sh3.dir/src/runtime/helper.c.o"], text=True)
+            self.assertEqual('.gnu.lto_' in object_sections, selected,
+                             'actual object does not match requested LTO mode')
+
+    @unittest.skipUnless(os.environ.get("SH3_REAL_BUILD_TESTS") == "1",
+                         "requires real Linux ARM64 Docker build")
+    def test_changed_source_rebuilds_when_its_mtime_predates_cached_object(self):
+        source = self.root / "src/runtime/host.c"
+        source.parent.mkdir(parents=True)
+        source.write_text('#include <stdio.h>\nint main(void) { puts("first"); }\n')
+        (self.root / "CMakeLists.txt").write_text(
+            'cmake_minimum_required(VERSION 3.20)\nproject(cache_check C)\n'
+            'add_executable(sh3 src/runtime/host.c)\n')
+        (self.root / "scripts/build/native.sh").write_text('''#!/bin/bash
+set -euo pipefail
+mkdir -p build/arm64 dist/runtime
+cmake -S . -B build/arm64 -G Ninja
+cmake --build build/arm64
+cp build/arm64/sh3 dist/runtime/sh3
+dpkg-query -W > build/arm64/packages.txt
+cc --version > build/arm64/compiler.txt
+getconf GNU_LIBC_VERSION > build/arm64/libc.txt
+python3 --version > build/arm64/python.txt
+''')
+        env = {**self.env, "PATH": os.environ["PATH"]}
+        image = "sh3-r36s-build:" + hashlib.sha256(
+            (self.root / "scripts/build/Dockerfile").read_bytes()).hexdigest()[:16]
+
+        def build_and_run():
+            result = subprocess.run(["python3", str(self.root / "scripts/host/build.py")],
+                                    cwd=self.root, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            return subprocess.check_output([
+                "docker", "run", "--rm", "--platform", "linux/arm64", "--mount",
+                f"type=bind,src={self.root / 'dist/runtime'},dst=/artifact,readonly",
+                image, "/artifact/sh3"], text=True).strip()
+
+        self.assertEqual(build_and_run(), "first")
+        source.write_text('#include <stdio.h>\nint main(void) { puts("second"); }\n')
+        os.utime(source, ns=(1_000_000_000, 1_000_000_000))
+        self.assertEqual(build_and_run(), "second",
+                         "build identity changed but executable still contains old source")
+
+        # A failed build may already have replaced objects; returning to a known
+        # source revision must not reuse those partially changed objects.
+        native = self.root / "scripts/build/native.sh"
+        good_native, good_source = native.read_text(), source.read_text()
+        source.write_text('#include <stdio.h>\nint main(void) { puts("failed revision"); }\n')
+        native.write_text(good_native + 'exit 17\n')
+        failed = subprocess.run(["python3", str(self.root / "scripts/host/build.py")],
+                                cwd=self.root, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(failed.returncode, 17, failed.stderr + failed.stdout)
+        native.write_text(good_native)
+        source.write_text(good_source)
+        os.utime(source, ns=(1_000_000_000, 1_000_000_000))
+        self.assertEqual(build_and_run(), "second", "failed build poisoned reverted source")
 
 
 class BuildCleanupCliTests(unittest.TestCase):

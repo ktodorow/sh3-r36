@@ -23,6 +23,7 @@ FILES = ["scripts/device/inventory.sh", "scripts/device/run.sh",
          "scripts/device/monitor-game.sh",
          "ports/Silent Hill 3.sh", "ports/Silent Hill 3 Runtime Diagnostics.sh",
          "ports/Silent Hill 3 Graphics Diagnostics.sh", "ports/Silent Hill 3 Game.sh",
+         "ports/Silent Hill 3 Performance.sh",
          "ports/game-session.sh", "ports/restore-frontend.sh"]
 
 
@@ -60,11 +61,32 @@ def main():
     parser.add_argument("--seed-session", type=Path, help="Copy explicit checkpoint into isolated scene session")
     parser.add_argument("--physical-controls", action="store_true",
                         help="Run handheld input check through game menu, without scripted keys or captures")
+    parser.add_argument("--physical-profile", choices=["320x240", "640x480"],
+                        help="Measure isolated handheld gameplay at selected internal resolution, without captures")
     parser.add_argument("--persistent-state", action="store_true",
                         help="Run physical check with ordinary persistent player state")
     parser.add_argument("--import-session", type=Path,
                         help="Copy collected player state on first persistent launch only")
+    parser.add_argument("--prime-program-cache", type=Path,
+                        help="Prime missing player program cache from measured same-device cache; preserve existing state")
     args = parser.parse_args()
+    if args.prime_program_cache and args.action != "game":
+        parser.error("--prime-program-cache requires game action")
+    primed_cache = None
+    if args.prime_program_cache:
+        try:
+            if not 8 < args.prime_program_cache.stat().st_size <= 32 * 1024 * 1024:
+                parser.error("Invalid compiled program cache size")
+            primed_cache = args.prime_program_cache.read_bytes()
+        except OSError:
+            parser.error("Invalid compiled program cache file")
+        if (int.from_bytes(primed_cache[:4], "little") != 0x53484231 or
+                not 0 < int.from_bytes(primed_cache[4:8], "little") <= len(primed_cache) - 8):
+            parser.error("Invalid compiled program cache header")
+    if args.physical_profile:
+        args.physical_controls = True
+        if args.persistent_state or args.import_session:
+            parser.error("--physical-profile uses isolated state; omit persistent/import options")
     if args.persistent_state:
         args.physical_controls = True
     if args.import_session and not args.persistent_state:
@@ -87,7 +109,7 @@ def main():
     imported = {}
     if args.import_session:
         args.import_session = args.import_session.resolve()
-        names = ["sh3.ini", "sh3-progs.bin", "savedata/data.sys", "savedata/disp.ini", "savedata/key.ini"]
+        names = ["sh3.ini", "sh3-progs.bin", "sh3-gl-cache.bin", "savedata/data.sys", "savedata/disp.ini", "savedata/key.ini"]
         names += [str(p.relative_to(args.import_session)) for p in
                   sorted((args.import_session / "savedata").glob("data.[0-9][0-9][0-9]"))]
         imported = {name: hashlib.sha256((args.import_session / name).read_bytes()).hexdigest()
@@ -136,6 +158,8 @@ def main():
                 "collection": "not-attempted"}
     if args.physical_controls:
         statuses["physical_controls"] = True
+    if args.physical_profile:
+        statuses["physical_profile"] = args.physical_profile
     if args.persistent_state:
         statuses["persistent_state"] = True
     private = [v for k, v in cfg.items() if v and
@@ -188,6 +212,8 @@ def main():
     save("source-identity.json", json.dumps({"base_commit": commit, "files": identity}, indent=2) + "\n")
     if imported:
         save("import-identity.json", json.dumps({"files": imported}, indent=2) + "\n")
+    if primed_cache is not None:
+        save("program-cache-identity.json", json.dumps({"sha256": hashlib.sha256(primed_cache).hexdigest()}, indent=2) + "\n")
     data_root = Path(cfg.get("SH3_GAME_DIR") or ROOT / "SILENT HILL 3").expanduser()
     result = subprocess.run(["bash", str(ROOT / "scripts/device/check-data.sh"), str(data_root)],
                             capture_output=True, text=True,
@@ -214,8 +240,14 @@ def main():
                 (payload / "hash-data").touch()
             if args.physical_controls:
                 (payload / "physical-controls").touch()
+            if args.physical_profile:
+                (payload / "physical-profile").write_text(args.physical_profile + "\n")
             if args.persistent_state:
                 (payload / "persistent-state").touch()
+            if primed_cache is not None:
+                cache = payload / "performance-cache/sh3-gl-cache.bin"
+                cache.parent.mkdir()
+                cache.write_bytes(primed_cache)
             for name in imported:
                 dest = payload / "import-state" / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -235,11 +267,11 @@ def main():
             if code == 0:
                 script = shlex.join(["bash", remote_payload + "/scripts/device/run.sh",
                                      args.action, f"/roms2/ports/{port}", run_id, remote_payload])
-                execution_limit = 600 if args.hash_data else 180 if args.action == "game" else 120
+                execution_limit = 600 if args.hash_data else 280 if args.action == "game" else 120
                 if scene:
-                    execution_limit = scene["plan"]["seconds"] + 100
+                    execution_limit = scene["plan"]["seconds"] + 180
                 if args.physical_controls:
-                    execution_limit = 1050
+                    execution_limit = 1080
                 statuses["execution"] = ssh("execute", script, timeout=execution_limit)
             else:
                 statuses["execution"] = "deployment-failed"
@@ -264,6 +296,11 @@ def main():
             statuses["source-preserved"] = all((args.import_session / name).is_file() and
                 hashlib.sha256((args.import_session / name).read_bytes()).hexdigest() == digest
                 for name, digest in imported.items())
+        if primed_cache is not None:
+            statuses["program-cache-source-preserved"] = (args.prime_program_cache.is_file() and
+                hashlib.sha256(args.prime_program_cache.read_bytes()).digest() == hashlib.sha256(primed_cache).digest())
+            statuses["source-preserved"] = (statuses.get("source-preserved", True) and
+                                             statuses["program-cache-source-preserved"])
         save("status.json", json.dumps(statuses, indent=2) + "\n")
     print("Evidence:", out.relative_to(ROOT))
     print("Local data:", statuses["local-data"], "Execution:", statuses["execution"],

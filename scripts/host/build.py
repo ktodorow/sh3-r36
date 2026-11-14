@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build selected owner input in reusable, pinned native Linux ARM64 Docker image."""
+import argparse
 import hashlib
 import json
 import os
@@ -9,11 +10,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 from r36s import ROOT, check_ignores, config
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--optimization", choices=("O2", "O3"), default="O2",
+                        help="Bounded compiler comparison; O2 remains default")
+    parser.add_argument("--lto", action="store_true",
+                        help="Compare link-time optimization with two bounded compiler jobs")
+    args = parser.parse_args()
     check_ignores()
     cfg = config()
     game = Path(cfg.get("SH3_GAME_DIR") or ROOT / "SILENT HILL 3").expanduser().resolve()
@@ -31,6 +39,7 @@ def main():
     image = "sh3-r36s-build:" + recipe[:16]
     (evidence / "build-inputs.json").write_text(json.dumps({
         "input_sha1": input_sha1, "input_size": len(source), "recipe_sha256": recipe,
+        "optimization": args.optimization, "lto": args.lto,
     }, indent=2) + "\n")
     probe = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True)
     if probe.returncode:
@@ -46,10 +55,13 @@ def main():
         raise ValueError("Build image must be Linux ARM64")
     out = ROOT / "build/arm64"
     out.mkdir(parents=True, exist_ok=True)
+    source_cache = out / "source-inputs.json"
+    previous_inputs = json.loads(source_cache.read_text()) if source_cache.is_file() else {}
     paths = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT).decode().split("\0")
     inputs = {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for p in paths
               if p and (p == "CMakeLists.txt" or p.startswith(("src/", "tools/", "assets/", "third_party/", "scripts/build/", "scripts/host/"))) and (ROOT / p).is_file()}
     identity = {"input_sha1": input_sha1, "input_size": len(source), "image_id": info["Id"],
+                "optimization": args.optimization, "lto": args.lto,
                 "recipe_sha256": recipe, "source": inputs,
                 "base_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()}
     generation = {p: digest for p, digest in inputs.items()
@@ -64,10 +76,18 @@ def main():
     # Snapshot excludes private config and original game data. Selected EXE mounts read-only.
     with tempfile.TemporaryDirectory(prefix="sh3-source-", dir=ROOT / ".port-cache") as temp:
         stage = Path(temp)
-        for name in inputs:
+        snapshot_inputs = {}
+        snapshot_mtime = time.time_ns()
+        for name, digest in inputs.items():
             dest = stage / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, dest)
+            if hashlib.sha256(dest.read_bytes()).hexdigest() != digest:
+                raise ValueError("Source changed while creating build snapshot")
+            previous = previous_inputs.get(name, {})
+            mtime = previous.get("mtime_ns", snapshot_mtime) if previous.get("sha256") == digest else snapshot_mtime
+            os.utime(dest, ns=(mtime, mtime))
+            snapshot_inputs[name] = {"sha256": digest, "mtime_ns": mtime}
         for name in ["build", "dist", "src/recomp/gen", "owner"]:
             (stage / name).mkdir(parents=True, exist_ok=True)
         (stage / "owner/sh3.exe").touch()
@@ -83,10 +103,18 @@ def main():
                 "--mount", f"type=bind,src={artifacts},dst=/work/dist",
                 "-e", "SH3_EXE=/work/owner/sh3.exe", "-e", f"SOURCE_DATE_EPOCH={epoch}",
                 "-e", "SH3_GENERATION_KEY=" + identity["generation_key"],
+                "-e", "SH3_OPTIMIZATION=" + args.optimization,
+                "-e", "SH3_LTO=" + ("1" if args.lto else "0"),
                 "-e", "SH3_BUILD_JOBS=" + os.environ.get("SH3_BUILD_JOBS", "2"), image,
                 "bash", "scripts/build/native.sh"]
+        # Failed/interrupted compilation can replace some cached objects. Only
+        # a complete successful build may reuse this snapshot's source times.
+        source_cache.unlink(missing_ok=True)
         with (evidence / "build.stdout.txt").open("w") as stdout, (evidence / "build.stderr.txt").open("w") as stderr:
             status = subprocess.run(argv, stdout=stdout, stderr=stderr).returncode
+    if status == 0:
+        source_cache.write_text(json.dumps(snapshot_inputs, indent=2) + "\n")
+        shutil.copy2(source_cache, evidence / source_cache.name)
     (evidence / "exit-status.txt").write_text(str(status) + "\n")
     for name in ["packages.txt", "compiler.txt", "libc.txt", "python.txt", "generation.stdout.txt", "generation.stderr.txt"]:
         if (out / name).is_file():

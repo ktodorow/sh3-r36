@@ -68,6 +68,18 @@ class GraphicsEvidenceTests(unittest.TestCase):
         self.assertIn("mali", providers.lower())
         self.assertNotIn("libGL4ES", providers)
 
+    def test_native_context_can_render_and_swap_on_worker_then_resume_original_thread(self):
+        self.assertIn('worker_context=PASS distinct_thread=yes restored=yes rgba=255,0,255,255',
+                      self.log)
+        self.assertNotIn('worker_context_error=', self.log)
+        self.assertIn('gles=PASS', self.log)
+
+    def test_native_queued_renderer_completes_graphics_suite_and_restores_context(self):
+        self.assertIn('gl_thread=enabled max_frames_ahead=1', self.log)
+        self.assertIn('gl_thread=stopped restored=yes', self.log)
+        self.assertIn('front_swap_modes=PASS gl_error=0000', self.log)
+        self.assertIn('gles=PASS', self.log)
+
     def test_dxt_block_edges_tail_mips_and_partial_updates_are_rendered(self):
         self.assertIn("dxt_edges_updates=PASS", self.log)
         for fmt in (1,3,5):
@@ -104,6 +116,22 @@ class GraphicsEvidenceTests(unittest.TestCase):
                         (16,36,(0,0,128)),(48,36,(128,128,0))]:
             actual = pixels[(y*64+x)*3:(y*64+x)*3+3]
             self.assertTrue(all(abs(a-b) <= 1 for a,b in zip(actual,rgb)),tuple(actual))
+
+    def test_native_front_pixels_survive_swap_modes_repeated_presents_and_resets(self):
+        self.assertIn('front_swap_modes=PASS gl_error=0000', self.log)
+        for width,height in [(64,48), (80,60)]:
+            for mode in [1,3]:
+                for index,bgra in enumerate([b'\x00\x00\xff\xff', b'\x00\xff\x00\xff',
+                                              b'\xff\x00\x00\xff']):
+                    path = self.evidence / f'launcher/front-mode-{mode}-{width}-{index}.bgra'
+                    pixels = path.read_bytes()
+                    self.assertEqual(len(pixels), (width+2)*(height+2)*4)
+                    for x,y in [(0,0), (width//2,height//2), (width-1,height-1)]:
+                        offset = (y*(width+2)+x)*4
+                        self.assertEqual(pixels[offset:offset+4], bgra)
+                    for x,y in [(width,0), (0,height)]:
+                        offset = (y*(width+2)+x)*4
+                        self.assertEqual(pixels[offset:offset+4], b'\xcd'*4)
 
     def test_sampler_address_modes_border_color_and_linear_filtering(self):
         self.assertIn("samplers=PASS",self.log)
@@ -147,6 +175,21 @@ class GraphicsEvidenceTests(unittest.TestCase):
         for x, y, rgb in [(16, 12, (255, 0, 0)), (48, 12, (0, 255, 0)),
                           (16, 40, (0, 0, 255)), (48, 40, (255, 255, 0))]:
             self.assertEqual(tuple(pixels[(y * 64 + x) * 3: (y * 64 + x) * 3 + 3]), rgb)
+
+    def test_point_triangle_and_line_switches_preserve_pixels(self):
+        self.assertIn('primitive_transitions=PASS gl_error=0000', self.log)
+        expected = {
+            'primitive-triangle': [(32,24,(255,0,0)), (2,2,(0,0,0))],
+            'primitive-line': [(32,12,(0,0,255)), (32,24,(0,0,0))],
+            'primitive-triangle-after': [(32,24,(0,0,255)), (2,2,(0,0,0))],
+        }
+        for suffix in ('', '-bound', '-indexed', '-indexed-up'):
+            expected['primitive-point' + suffix] = [(32,24,(0,255,0)),
+                                                   (31,24,(0,0,0)), (32,23,(0,0,0))]
+        for name, points in expected.items():
+            _, pixels = (self.evidence / f'launcher/{name}.ppm').read_bytes().split(b'\n255\n', 1)
+            for x, y, rgb in points:
+                self.assertEqual(tuple(pixels[(y*64+x)*3:(y*64+x)*3+3]), rgb, name)
 
     def test_game_skin_shader_uses_weighted_relative_bone_constants(self):
         self.assertIn("sample_skin_offset=002b6b70", self.log)

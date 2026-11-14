@@ -2,6 +2,7 @@
  * recompiler (--exclude-manual), which then leaves these functions out of src/recomp/gen. */
 #include "../runtime/rt.h"
 #include "../runtime/host.h"
+#include <time.h>
 
 /* The static CRT's memcpy (memmove semantics) and its second copy: their jump tables sit past the end
  * the disassembler finds and are indexed backwards, so the lifted copies cannot follow them. */
@@ -13,6 +14,73 @@ static void crt_memmove(void) {
 }
 void sub_00661D20(void) { crt_memmove(); }
 void sub_0066F9C0(void) { crt_memmove(); }
+
+static int paced_profile(void) {
+    static int paced = -1;
+    if (paced < 0) {
+        const char *limit = getenv("SH3_FPS_LIMIT");
+        paced = limit && !strcmp(limit, "30");
+    }
+    return paced;
+}
+
+static uint64_t timer_read64(uint32_t address) {
+    return MEM32(address) | ((uint64_t)MEM32(address + 4) << 32);
+}
+static void timer_write64(uint32_t address, uint64_t value) {
+    MEM32(address) = (uint32_t)value;
+    MEM32(address + 4) = (uint32_t)(value >> 32);
+}
+
+/* The original timer requires at least one future tick even when this frame
+ * is already late. Consume ticks that have already elapsed instead. Keep its
+ * absolute clock and division remainder, so no wall time or tick phase is lost.
+ * Under-budget frames and special clock modes still use the original wait. */
+extern void sub_0041B2C0_gen(void);
+void sub_0041B2C0(void) {
+    uint32_t mode = MEM32(0x72C7E8), refresh = MEM32(0x72C790);
+    uint64_t remainder = timer_read64(0x72C810);
+    if (paced_profile() && mode > 1 && mode <= 60 && (!refresh || refresh == 60) &&
+        MEM8(0x72C820) && timer_read64(0x72C818) == 1000000000 && remainder < 60) {
+        struct timespec stamp;
+        if (!clock_gettime(CLOCK_MONOTONIC, &stamp)) {
+            uint64_t now = (uint64_t)stamp.tv_sec * 1000000000 + stamp.tv_nsec;
+            uint64_t previous = timer_read64(0x72C808);
+            if (now >= previous && now - previous <= 1000000000) {
+                uint32_t elapsed = ((now - previous) * 60 + 59 - remainder) / 1000000000;
+                if (elapsed >= mode) {
+                    uint64_t period = remainder + (uint64_t)elapsed * 1000000000;
+                    timer_write64(0x72C808, previous + period / 60);
+                    timer_write64(0x72C810, period % 60);
+                    g_eax = MEM32(0x72C7F4) = elapsed;
+                    g_edx = MEM32(0x72C7F8) = 0;
+                    g_ecx = MEM32(0x72C7F0) += elapsed;
+                    g_esp += 4;
+                    return;
+                }
+            }
+        }
+    }
+    sub_0041B2C0_gen();
+}
+
+/* The original adaptive clock drops elapsed 60 Hz ticks below 20 FPS by
+ * clamping the simulation step to three. Preserve measured time during short
+ * slow frames, with a 133 ms stall bound. Special/unlocked clock modes retain
+ * their original policy; audio and movie clocks do not use this step. */
+extern void sub_005F15E0_gen(void);
+void sub_005F15E0(void) {
+    sub_005F15E0_gen();
+    uint32_t mode = MEM32(0x72C7E8), elapsed = MEM32(0x72C7F4);
+    if (mode > 1 && elapsed > 3)
+        MEM32(0xBCC630) = elapsed < 8 ? elapsed : 8;
+    if (paced_profile() && mode > 2) {
+        /* Presentation already has a 30 Hz limit. A late frame must not make
+         * the adaptive timer impose 20 Hz; simulate actual elapsed ticks. */
+        MEM32(0x72C7E8) = 2;
+        MEM32(0xBCC630) = elapsed ? (elapsed < 8 ? elapsed : 8) : 1;
+    }
+}
 
 /* ---- widescreen (ThirteenAG's SilentHill3.WidescreenFix, ported) ----
  * The display mode is always the screen's (resolution= in sh3.ini): the device is created and reset with it
@@ -119,6 +187,8 @@ recomp_func_t recomp_lookup_manual(uint32_t va) {
     switch (va) {
     case 0x00661D20u: return sub_00661D20;
     case 0x0066F9C0u: return sub_0066F9C0;
+    case 0x0041B2C0u: return sub_0041B2C0;
+    case 0x005F15E0u: return sub_005F15E0;
     case 0x004193A0u: return sub_004193A0;
     case 0x00419760u: return sub_00419760;
     case 0x00416AE0u: return sub_00416AE0;

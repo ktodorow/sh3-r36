@@ -51,12 +51,29 @@ to build intermediates, generated C and run-owned artifact directory. Private
 configuration never enters source snapshot. Only selected original EXE mounts,
 read-only; hash checked again after build.
 
+Compiler comparisons use `python3 scripts/host/build.py --optimization O3`.
+Only O2/O3 accepted; default remains O2. Selected level recorded in build identity
+and passed explicitly to CMake RelWithDebInfo flags. Keep Cortex-A35, wrap/alias
+and floating-point semantics unchanged; no fast-math option. Verified generation
+cache remains shared because optimization level does not change generated source.
+Compare actual compile commands, ELF size, launcher/pixel checks and matched
+device profiles before retaining variant. Rebuild with `--optimization O2` to
+restore baseline; preserve each build's artifacts and evidence.
+
 Pinned base: `debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`.
 Main and security snapshot: `20261111T000000Z`; generator wheel: Capstone 5.0.6.
 Image tag derives from Dockerfile SHA-256. Existing matching Linux ARM64 image
 reused. Installed package versions, compiler, Python dependencies, base commit,
 source hashes, selected input hash and generation key recorded per build.
 Generation reused only after complete generated-file manifest check.
+Source snapshot timestamps follow content hashes from last successful compile,
+not original file dates. Changed files get fresh timestamps; unchanged files
+retain prior snapshot dates for Ninja reuse. Invalidate this record before
+compilation so failed/interrupted builds cannot poison a later source revert.
+Saved `source-inputs.json` records actual snapshot hashes/times. Optional host
+regression `SH3_REAL_BUILD_TESTS=1 PYTHONPATH=tests python3 -m unittest test_build_cli`
+builds/runs a tiny native ARM64 fixture through same Docker CLI and checks stale
+mtime plus failed-build recovery; does not establish game/device compatibility.
 
 Graphics builds also extract selected shaders/declarations, original quad and
 render-target dimension tables
@@ -75,3 +92,13 @@ shared Docker layer cache intentionally preserved. `.port-cache/builds/` retains
 build evidence and package copies; `dist/` retains current and prior final
 packages, including host-only debug symbols. Generated C under `src/recomp/gen/`
 is preserved as source. No cleanup run deletes device history.
+
+Optional LTO comparison: `python3 scripts/host/build.py --optimization O3 --lto`.
+Default remains non-LTO; omit `--lto` to restore it. Build identity records both
+choices even if image setup fails. Native script passes `-flto=2` at compile
+and link, limiting linker compiler workers to2; no `-flto=auto`, fast-math,
+whole-program assumption or floating-point change. Wrap/alias options repeated
+at link. Explicit empty LTO flag clears cached CMake settings when disabled.
+Production-script ARM64 fixture checks real LTO object sections, runnable
+signed-wrap example and successful ON→OFF rebuild; it does not prove game speed.
+Follow [GCC12 LTO requirements](https://gcc.gnu.org/onlinedocs/gcc-12.2.0/gcc/Optimize-Options.html#index-flto).

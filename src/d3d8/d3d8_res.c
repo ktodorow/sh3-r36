@@ -5,6 +5,31 @@
 static Res *table[1 << 16];
 static uint32_t next_slot = 1;
 
+/* Attachments stay fixed for each texture/level pair. Delete entries before
+ * deleting or redefining their texture storage, including the shared depth. */
+typedef struct Target {
+    struct Target *next;
+    GLuint fbo, color, depth;
+    GLenum color_target;
+    GLint color_level, depth_level;
+    int complete;
+} Target;
+static Target *targets;
+
+static void forget_target_texture(GLuint texture) {
+    for (Target **link = &targets; *link;) {
+        Target *t = *link;
+        if (t->color != texture && t->depth != texture) {
+            link = &t->next;
+            continue;
+        }
+        *link = t->next;
+        if (dev && dev->fbo == t->fbo) dev->fbo = 0;
+        glDeleteFramebuffers(1, &t->fbo);
+        free(t);
+    }
+}
+
 /* NULL for NULL, and for anything that is not a live resource object (a released texture the game
  * still has bound, say), which is logged once. */
 Res *res_of(uint32_t obj) {
@@ -82,7 +107,10 @@ static Res *new_res(int kind, uint32_t vtable) {
 }
 
 static void free_res(Res *r) {
-    if (r->tex && !r->parent) glDeleteTextures(1, &r->tex);
+    if (r->tex && !r->parent) {
+        forget_target_texture(r->tex);
+        glDeleteTextures(1, &r->tex);
+    }
     if (r->buf) glDeleteBuffers(1, &r->buf);
     if (r->mem) gfree(r->mem);
     for (int f = 0; f < 6; f++)
@@ -172,8 +200,9 @@ static int rgba_upload(const Fmt *f) { return gl_es && f->gfmt == GL_BGRA; }
 static int native_block(const Fmt *f) {
     static SDL_GLContext context;
     static int supported[3];
-    if (context != SDL_GL_GetCurrentContext()) {
-        context = SDL_GL_GetCurrentContext();
+    SDL_GLContext current = gl_current_context();
+    if (context != current) {
+        context = current;
         memset(supported, 0, sizeof supported);
         GLint n = 0; glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &n);
         GLint *formats = calloc(n ? n : 1, sizeof *formats);
@@ -319,6 +348,33 @@ static void gl_ensure(Res *t) {
 
 static GLuint surface_tex(Res *s) { if (s->parent) { gl_ensure(s->parent); return s->parent->tex; } gl_ensure(s); return s->tex; }
 
+static GLuint target_framebuffer(Res *color, GLuint depth, GLint depth_level) {
+    GLuint texture = surface_tex(color);
+    GLenum texture_target = color->parent ? face_target(color->parent, color->face) : GL_TEXTURE_2D;
+    Target *t;
+    for (t = targets; t; t = t->next)
+        if (t->color == texture && t->color_target == texture_target && t->color_level == color->level &&
+            t->depth == depth && t->depth_level == depth_level) break;
+    if (!t) {
+        t = calloc(1, sizeof *t);
+        if (!t) rt_fatal("framebuffer cache allocation failed");
+        *t = (Target){.next = targets, .color = texture, .depth = depth, .color_target = texture_target,
+                      .color_level = color->level, .depth_level = depth_level};
+        targets = t;
+        glGenFramebuffers(1, &t->fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture_target, texture, color->level);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depth, depth_level);
+    }
+    if (!t->complete) {
+        glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+        GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        t->complete = st == GL_FRAMEBUFFER_COMPLETE;
+        if (!t->complete) rt_log("framebuffer incomplete: %04X (rt %ux%u fmt %u)", st, color->w, color->h, color->fmt);
+    }
+    return t->fbo;
+}
+
 /* Uploads one level from its guest copy. */
 static void upload_level(Res *t, Res *s) {
     const Fmt *f = fmt_info(s->fmt);
@@ -396,6 +452,7 @@ static GLuint spare_depth(uint32_t w, uint32_t h) {
     static uint32_t sw, sh;
     if (!tex || sw != w || sh != h) {
         if (!tex) glGenTextures(1, &tex);
+        else forget_target_texture(tex);
         glBindTexture(GL_TEXTURE_2D, tex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, w, h, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, NULL);
         sw = w;
@@ -412,12 +469,12 @@ void res_bind_targets(void) {
         depth = spare_depth(ds->w > rt->w ? ds->w : rt->w, ds->h > rt->h ? ds->h : rt->h);
         depth_level = 0;
     }
+    dev->fbo = target_framebuffer(rt, depth, depth_level);
     glBindFramebuffer(GL_FRAMEBUFFER, dev->fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rt->parent ? face_target(rt->parent, rt->face) : GL_TEXTURE_2D,
-                           surface_tex(rt), rt->level);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depth, depth_level);
-    GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (st != GL_FRAMEBUFFER_COMPLETE) rt_log("framebuffer incomplete: %04X (rt %ux%u fmt %u)", st, rt->w, rt->h, rt->fmt);
+}
+
+void res_bind_backbuffer_read(void) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, target_framebuffer(res_of(dev->backbuffer), 0, 0));
 }
 
 /* ES guarantees RGBA/UNSIGNED_BYTE for normalized color targets. The BGRA
@@ -476,21 +533,44 @@ static void readback(Res *s) {
 static GLuint front_tex, front_fbo;
 static uint32_t front_w, front_h;
 
+void res_reset_front(void) {
+    if (front_tex) {
+        forget_target_texture(front_tex);
+        glDeleteTextures(1, &front_tex);
+    }
+    if (front_fbo) glDeleteFramebuffers(1, &front_fbo);
+    front_tex = front_fbo = front_w = front_h = 0;
+}
+
 void res_snapshot_front(void) {  /* called by Present with the back buffer bound for reading */
     Res *bb = res_of(dev->backbuffer);
     if (!bb) return;
     if (!front_tex || front_w != bb->w || front_h != bb->h) {
-        if (front_tex) { glDeleteTextures(1, &front_tex); glDeleteFramebuffers(1, &front_fbo); }
+        res_reset_front();
         front_w = bb->w;
         front_h = bb->h;
-        glGenTextures(1, &front_tex);
-        glBindTexture(GL_TEXTURE_2D, front_tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, front_w, front_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glGenFramebuffers(1, &front_fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, front_fbo);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, front_tex, 0);
+        if (dev->swap_effect == 1) {
+            Res spare = {.kind = RES_SURFACE, .fmt = bb->fmt, .w = bb->w, .h = bb->h, .is_rt = 1};
+            gl_ensure(&spare);
+            front_tex = spare.tex;
+        } else {
+            glGenTextures(1, &front_tex);
+            glBindTexture(GL_TEXTURE_2D, front_tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, front_w, front_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glGenFramebuffers(1, &front_fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, front_fbo);
+            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, front_tex, 0);
+        }
+    }
+    if (dev->swap_effect == 1) {
+        /* DISCARD promises no back-buffer contents after Present. Retain its
+         * texture as front image, render next frame into previous spare. */
+        GLuint next = front_tex;
+        front_tex = bb->tex;
+        bb->tex = next;
+        return;
     }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, front_fbo);
     glBlitFramebuffer(0, 0, front_w, front_h, 0, 0, front_w, front_h, GL_COLOR_BUFFER_BIT, GL_NEAREST);

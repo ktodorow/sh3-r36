@@ -1,4 +1,209 @@
 {
+  "explore-route-320": {
+    "description": "Isolated four-minute map exploration: longer walks, turns, dash and door/action attempts without a readied weapon; no capture, 320x240 internal / 640x480 output",
+    "seed": true,
+    "seconds": 240,
+    "fps_limit": 30,
+    "capture_every": 0,
+    "profile": true,
+    "internal_resolution": "320x240",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,50:Q+0.6,52:W+10,52:Left Shift+10,54:Space+0.15,55:Space+0.15,56:Space+0.15,57:Space+0.15,58:Space+0.15,59:Space+0.15,60:Space+0.15,61:Space+0.15,62:Space+0.15,63:Space+0.15,64:E+1,66:W+12,66:Left Shift+12,70:Space+0.15,74:Space+0.15,80:Q+2,84:W+12,84:Left Shift+12,88:Space+0.15,92:Space+0.15,98:E+1,100:S+8,110:E+2,114:W+16,114:Left Shift+16,118:Space+0.15,122:Space+0.15,126:Space+0.15,132:Q+2,136:W+16,136:Left Shift+16,140:Space+0.15,144:Space+0.15,148:Space+0.15,154:E+2,158:W+14,158:Left Shift+14,162:Space+0.15,166:Space+0.15,170:Space+0.15,174:Q+2,178:S+8,188:E+2,192:W+14,192:Left Shift+14,196:Space+0.15,200:Space+0.15,204:Space+0.15,208:Q+2,212:W+16,212:Left Shift+16,216:Space+0.15,220:Space+0.15,224:Space+0.15,230:S+6",
+    "peek": "72D2C0,8984E0,8984E8,898660,72C7F0,72C7F4,BCC630,70E66F4,712CAA0,712CAAC,72BFD0,72BFD4,8984EC,8984F0,8984F4,8984F8,8984FC,898500,898504,898508",
+    "stages": [
+      {
+        "after_seconds": 48,
+        "before_seconds": 240,
+        "inspect": "verify live player, movement extent and actual room changes; report active gameplay and transitions separately; reject menu, death or wall-only intervals; action attempts do not establish doors opened or combat"
+      }
+    ]
+  },
+  "sustained-route-320": {
+    "description": "Fifteen-minute isolated checkpoint route: repeated movement, strafing and default-equipped attacks; no capture, 320x240 internal / 640x480 output",
+    "seed": true,
+    "seconds": 990,
+    "fps_limit": 30,
+    "capture_every": 0,
+    "profile": true,
+    "internal_resolution": "320x240",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,50:S+6,57:A+2,60:W+5,66:D+2,69:B+7,70:Space+5,80:S+6,87:A+2,90:W+5,96:D+2,99:B+7,100:Space+5,110:S+6,117:A+2,120:W+5,126:D+2,129:B+7,130:Space+5,140:S+6,147:A+2,150:W+5,156:D+2,159:B+7,160:Space+5,170:S+6,177:A+2,180:W+5,186:D+2,189:B+7,190:Space+5,200:S+6,207:A+2,210:W+5,216:D+2,219:B+7,220:Space+5,230:S+6,237:A+2,240:W+5,246:D+2,249:B+7,250:Space+5,260:S+6,267:A+2,270:W+5,276:D+2,279:B+7,280:Space+5,290:S+6,297:A+2,300:W+5,306:D+2,309:B+7,310:Space+5,320:S+6,327:A+2,330:W+5,336:D+2,339:B+7,340:Space+5,350:S+6,357:A+2,360:W+5,366:D+2,369:B+7,370:Space+5,380:S+6,387:A+2,390:W+5,396:D+2,399:B+7,400:Space+5,410:S+6,417:A+2,420:W+5,426:D+2,429:B+7,430:Space+5,440:S+6,447:A+2,450:W+5,456:D+2,459:B+7,460:Space+5,470:S+6,477:A+2,480:W+5,486:D+2,489:B+7,490:Space+5,500:S+6,507:A+2,510:W+5,516:D+2,519:B+7,520:Space+5,530:S+6,537:A+2,540:W+5,546:D+2,549:B+7,550:Space+5,560:S+6,567:A+2,570:W+5,576:D+2,579:B+7,580:Space+5,590:S+6,597:A+2,600:W+5,606:D+2,609:B+7,610:Space+5,620:S+6,627:A+2,630:W+5,636:D+2,639:B+7,640:Space+5,650:S+6,657:A+2,660:W+5,666:D+2,669:B+7,670:Space+5,680:S+6,687:A+2,690:W+5,696:D+2,699:B+7,700:Space+5,710:S+6,717:A+2,720:W+5,726:D+2,729:B+7,730:Space+5,740:S+6,747:A+2,750:W+5,756:D+2,759:B+7,760:Space+5,770:S+6,777:A+2,780:W+5,786:D+2,789:B+7,790:Space+5,800:S+6,807:A+2,810:W+5,816:D+2,819:B+7,820:Space+5,830:S+6,837:A+2,840:W+5,846:D+2,849:B+7,850:Space+5,860:S+6,867:A+2,870:W+5,876:D+2,879:B+7,880:Space+5,890:S+6,897:A+2,900:W+5,906:D+2,909:B+7,910:Space+5,920:S+6,927:A+2,930:W+5,936:D+2,939:B+7,940:Space+5,950:S+6,957:A+2,960:W+5,966:D+2,969:B+7,970:Space+5",
+    "peek": "72D2C0,8984E0,8984E8,898660,72C7F0,72C7F4,BCC630,70E66F4,712CAA0,712CAA4,712CAAC,712CAB0,72BFD0,72BFD4",
+    "stages": [
+      {
+        "after_seconds": 48,
+        "before_seconds": 990,
+        "inspect": "verify live player and changing position throughout; report room visits, complete 1s/5s FPS windows, frame tails, clocks and temperatures; reject menu, death and wall-only intervals; do not infer attacks from scheduled keys"
+      }
+    ]
+  },
+  "traverse-route-320": {
+    "description": "Isolated cross-level save traversal with default equipped weapon; no inventory assumptions, no capture, 320x240 internal / 640x480 output",
+    "seed": true,
+    "seconds": 160,
+    "fps_limit": 30,
+    "capture_every": 0,
+    "profile": true,
+    "internal_resolution": "320x240",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,50:S+6,57:A+2,60:W+5,66:D+2,69:S+5,76:B+5,77:Space+3,84:W+5,90:A+2,93:S+5,99:D+2,104:B+5,105:Space+3,112:W+5,118:A+2,121:S+5,127:D+2,132:B+5,133:Space+3,140:W+5,146:S+5",
+    "peek": "72D2C0,8984E0,8984E8,898660,72C7F0,72C7F4,BCC630,70E66F4,712CAA0,712CAA4,712CAAC,712CAB0,72BFD0,72BFD4",
+    "stages": [
+      {
+        "after_seconds": 48,
+        "before_seconds": 160,
+        "inspect": "verify actual loaded room, live player and changing position; report active gameplay and transition windows separately; reject menu/death/wall-only coverage and do not infer weapon use from key schedule"
+      }
+    ]
+  },
+  "performance-route-640": {
+    "description": "Matched full-resolution checkpoint movement/strafing and repeated weapon attacks; actual completion cadence, no capture, 640x480 internal / 640x480 output",
+    "seed": true,
+    "seconds": 180,
+    "fps_limit": 30,
+    "capture_every": 0,
+    "profile": true,
+    "internal_resolution": "640x480",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,48:I+0.4,51:S+0.15,53:S+0.15,55:E+0.15,57:E+0.15,60:Return+0.15,61:Return+0.15,62:I+0.4,63:B+6,64:Space+3,75:S+6,82:A+2,85:W+5,91:D+2,94:S+5,100:B+5,101:Space+3,108:W+5,114:A+2,117:S+5,123:D+2,126:B+5,127:Space+3,134:W+5,140:A+2,143:S+5,149:D+2,152:B+5,153:Space+3,160:W+5,166:S+5",
+    "peek": "72D2C0,8984E0,8984E8,898660,72C7F0,72C7F4,BCC630,70E66F4,712CAA0,712CAAC,72BFD0,72BFD4",
+    "stages": [
+      {
+        "after_seconds": 50,
+        "before_seconds": 180,
+        "inspect": "verify live player, changing position and actual attacks; report room visits, 1s/5s FPS dips, frame tails, clocks and temperatures; reject menu/death/wall-only coverage"
+      }
+    ]
+  },
+  "performance-route-320": {
+    "description": "Unattended checkpoint movement/strafing and repeated weapon attacks; actual completion cadence, no capture, 320x240 internal / 640x480 output",
+    "seed": true,
+    "seconds": 180,
+    "fps_limit": 30,
+    "capture_every": 0,
+    "profile": true,
+    "internal_resolution": "320x240",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,48:I+0.4,51:S+0.15,53:S+0.15,55:E+0.15,57:E+0.15,60:Return+0.15,61:Return+0.15,62:I+0.4,63:B+6,64:Space+3,75:S+6,82:A+2,85:W+5,91:D+2,94:S+5,100:B+5,101:Space+3,108:W+5,114:A+2,117:S+5,123:D+2,126:B+5,127:Space+3,134:W+5,140:A+2,143:S+5,149:D+2,152:B+5,153:Space+3,160:W+5,166:S+5",
+    "peek": "72D2C0,8984E0,8984E8,898660,72C7F0,72C7F4,BCC630,70E66F4,712CAA0,712CAAC,72BFD0,72BFD4",
+    "stages": [
+      {
+        "after_seconds": 50,
+        "before_seconds": 180,
+        "inspect": "verify live player, changing position and actual attacks; report room visits, 1s/5s FPS dips, frame tails, clocks and temperatures; reject menu/death/wall-only coverage"
+      }
+    ]
+  },
+  "profile-clean-320": {
+    "description": "Matched stationary room210 comparison with frame/CPU profiler disabled, no capture, 320x240 internal and 640x480 output",
+    "seed": true,
+    "seconds": 100,
+    "capture_every": 0,
+    "profile": false,
+    "internal_resolution": "320x240",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4",
+    "peek": "72D2C0,8984E0,8984E8,898660,72BFD0,72BFD4,72C7F0,72C7F4,BCC630,70E66F4",
+    "stages": [
+      {
+        "after_seconds": 55,
+        "before_seconds": 95,
+        "inspect": "same stationary warmed checkpoint and camera; sparse native wall timestamps and frame numbers, frame/CPU profiler disabled"
+      }
+    ]
+  },
+  "profile-static-640": {
+    "description": "Matched stationary room210 profile: CPU-side frame costs, no capture, 640x480 internal/output",
+    "seed": true,
+    "seconds": 100,
+    "capture_every": 0,
+    "profile": true,
+    "internal_resolution": "640x480",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4",
+    "peek": "72D2C0,8984E0,8984E8,898660,72BFD0,72BFD4,72C7F0,72C7F4,BCC630,70E66F4",
+    "stages": [
+      {
+        "after_seconds": 55,
+        "before_seconds": 95,
+        "inspect": "stationary warmed checkpoint, fixed camera; frame percentiles, CPU/draw/presentation waits, clocks and thermals"
+      }
+    ]
+  },
+  "profile-static-320": {
+    "description": "Matched stationary room210 profile: CPU-side frame costs, no capture, 320x240 internal and 640x480 output",
+    "seed": true,
+    "seconds": 100,
+    "capture_every": 0,
+    "profile": true,
+    "internal_resolution": "320x240",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4",
+    "peek": "72D2C0,8984E0,8984E8,898660,72BFD0,72BFD4,72C7F0,72C7F4,BCC630,70E66F4",
+    "stages": [
+      {
+        "after_seconds": 55,
+        "before_seconds": 95,
+        "inspect": "same stationary warmed checkpoint and camera; compare frame costs against 640 profile"
+      }
+    ]
+  },
+  "timing-movement-640": {
+    "description": "Automated fixed-checkpoint movement timing, 640x480 internal/output, no capture",
+    "seed": true,
+    "seconds": 100,
+    "capture_every": 0,
+    "internal_resolution": "640x480",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,75:S+4",
+    "peek": "72C808,72C80C,72C818,72C7F0,72C7F4,BCC630,70E66F4,8984E0,8984E8,898660,72D2C0,72BFD0,72BFD4",
+    "stages": [
+      {
+        "after_seconds": 60,
+        "before_seconds": 100,
+        "inspect": "same live checkpoint, complete four-second input, distance and game timer against wall clock"
+      }
+    ]
+  },
+  "timing-movement-320": {
+    "description": "Automated fixed-checkpoint movement timing, 320x240 internal and 640x480 output, no capture",
+    "seed": true,
+    "seconds": 100,
+    "capture_every": 0,
+    "internal_resolution": "320x240",
+    "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,75:S+4",
+    "peek": "72C808,72C80C,72C818,72C7F0,72C7F4,BCC630,70E66F4,8984E0,8984E8,898660,72D2C0,72BFD0,72BFD4",
+    "stages": [
+      {
+        "after_seconds": 60,
+        "before_seconds": 100,
+        "inspect": "same live checkpoint, complete four-second input, distance and game timer against wall clock"
+      }
+    ]
+  },
+  "timing-audio-640": {
+    "description": "Handheld timing/audio check: real controls, read-only clocks, no framebuffer capture, 640x480 internal/output",
+    "seed": true,
+    "seconds": 900,
+    "capture_every": 0,
+    "internal_resolution": "640x480",
+    "keys": "",
+    "peek": "72C808,72C80C,72C818,72C7F0,72C7F4,BCC630,70E66F4,8984E0,8984E8,898660,72D2C0,72BFD0,72BFD4,712CAA0,712CAA4,712CAAC,712CAB0,712C168",
+    "stages": [
+      {
+        "after_seconds": 0,
+        "before_seconds": 900,
+        "inspect": "load checkpoint with handheld; timed movement/combat/animation; music/dialogue/effects; transitions and repeated playback; Select+Start exit"
+      }
+    ]
+  },
+  "timing-audio-320": {
+    "description": "Handheld timing/audio check: real controls, read-only clocks, no framebuffer capture, 320x240 internal and 640x480 output",
+    "seed": true,
+    "seconds": 900,
+    "capture_every": 0,
+    "internal_resolution": "320x240",
+    "keys": "",
+    "peek": "72C808,72C80C,72C818,72C7F0,72C7F4,BCC630,70E66F4,8984E0,8984E8,898660,72D2C0,72BFD0,72BFD4,712CAA0,712CAA4,712CAAC,712CAB0,712C168",
+    "stages": [
+      {
+        "after_seconds": 0,
+        "before_seconds": 900,
+        "inspect": "load same checkpoint with handheld; repeat timing/audio checklist; Select+Start exit"
+      }
+    ]
+  },
   "checkpoint-ui": {
     "description": "Room210 fixed checkpoint: fog, inventory snapshot, unavailable-map response, flashlight toggle and fades",
     "seed": true,
@@ -7,11 +212,31 @@
     "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,65:I+0.5,85:Escape+0.5,100:M+0.5,115:Escape+0.5,125:L+0.5",
     "peek": "72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660",
     "stages": [
-      {"after_seconds": 50, "before_seconds": 65, "inspect": "stationary checkpoint, default camera, fog"},
-      {"after_seconds": 70, "before_seconds": 85, "inspect": "inventory text, icons and tinted scene snapshot"},
-      {"after_seconds": 90, "before_seconds": 100, "inspect": "return fade and restored scene"},
-      {"after_seconds": 105, "before_seconds": 115, "inspect": "map request; checkpoint has no acquired map"},
-      {"after_seconds": 130, "before_seconds": 145, "inspect": "flashlight toggle response, same position"}
+      {
+        "after_seconds": 50,
+        "before_seconds": 65,
+        "inspect": "stationary checkpoint, default camera, fog"
+      },
+      {
+        "after_seconds": 70,
+        "before_seconds": 85,
+        "inspect": "inventory text, icons and tinted scene snapshot"
+      },
+      {
+        "after_seconds": 90,
+        "before_seconds": 100,
+        "inspect": "return fade and restored scene"
+      },
+      {
+        "after_seconds": 105,
+        "before_seconds": 115,
+        "inspect": "map request; checkpoint has no acquired map"
+      },
+      {
+        "after_seconds": 130,
+        "before_seconds": 145,
+        "inspect": "flashlight toggle response, same position"
+      }
     ]
   },
   "indoor-ui": {
@@ -22,11 +247,31 @@
     "keys": "10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,65:I+0.5,85:Escape+0.5,100:M+0.5,115:Escape+0.5,125:L+0.5",
     "peek": "72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660",
     "stages": [
-      {"after_seconds": 50, "before_seconds": 65, "inspect": "saved position/default camera, indoor light and shadow"},
-      {"after_seconds": 70, "before_seconds": 85, "inspect": "inventory text, icons and tinted scene snapshot"},
-      {"after_seconds": 90, "before_seconds": 100, "inspect": "return fade and restored scene"},
-      {"after_seconds": 105, "before_seconds": 115, "inspect": "acquired map, location marker and clipping"},
-      {"after_seconds": 130, "before_seconds": 145, "inspect": "flashlight toggle, same position"}
+      {
+        "after_seconds": 50,
+        "before_seconds": 65,
+        "inspect": "saved position/default camera, indoor light and shadow"
+      },
+      {
+        "after_seconds": 70,
+        "before_seconds": 85,
+        "inspect": "inventory text, icons and tinted scene snapshot"
+      },
+      {
+        "after_seconds": 90,
+        "before_seconds": 100,
+        "inspect": "return fade and restored scene"
+      },
+      {
+        "after_seconds": 105,
+        "before_seconds": 115,
+        "inspect": "acquired map, location marker and clipping"
+      },
+      {
+        "after_seconds": 130,
+        "before_seconds": 145,
+        "inspect": "flashlight toggle, same position"
+      }
     ]
   },
   "opening-cutscene": {
@@ -37,7 +282,11 @@
     "keys": "10:Return+0.4,30:Return+0.4,32:Return+0.4,34:Return+0.4",
     "peek": "72BFD0,72BFD4,72D2C0,8984E0,8984E8,898660",
     "stages": [
-      {"after_seconds": 38, "before_seconds": 240, "inspect": "natural opening sequence: camera motion, Heather face/hair alpha, fades, then interactive park"}
+      {
+        "after_seconds": 38,
+        "before_seconds": 240,
+        "inspect": "natural opening sequence: camera motion, Heather face/hair alpha, fades, then interactive park"
+      }
     ]
   }
 }

@@ -104,7 +104,7 @@ main() {
             for path in "$SH3_IMPORT_SESSION"/savedata/data.[0-9][0-9][0-9] \
                 "$SH3_IMPORT_SESSION"/savedata/data.sys "$SH3_IMPORT_SESSION"/savedata/disp.ini \
                 "$SH3_IMPORT_SESSION"/savedata/key.ini "$SH3_IMPORT_SESSION"/sh3.ini \
-                "$SH3_IMPORT_SESSION"/sh3-progs.bin; do
+                "$SH3_IMPORT_SESSION"/sh3-progs.bin "$SH3_IMPORT_SESSION"/sh3-gl-cache.bin; do
                 [ -f "$path" ] || continue
                 local target="$stage/$(basename "$path")"
                 case "$path" in "$SH3_IMPORT_SESSION"/savedata/*) target="$stage/savedata/$(basename "$path")" ;; esac
@@ -133,15 +133,18 @@ main() {
                     cp -p "$SH3_SEED_SESSION/savedata/$name" "$session/savedata/$name" || return 3
                 fi
             done
-            if [ -f "$SH3_SEED_SESSION/sh3-progs.bin" ]; then
-                cp -p "$SH3_SEED_SESSION/sh3-progs.bin" "$session/sh3-progs.bin" || return 3
-            fi
+            for name in sh3-progs.bin sh3-gl-cache.bin; do
+                if [ -f "$SH3_SEED_SESSION/$name" ]; then
+                    cp -p "$SH3_SEED_SESSION/$name" "$session/$name" || return 3
+                fi
+            done
         fi
         if [ -n "${SH3_SHOT:-}" ]; then mkdir -p "$SH3_SHOT" || return 3; fi
         if [ -n "${SH3_INTERNAL_RESOLUTION:-}" ]; then
-            [ "$SH3_INTERNAL_RESOLUTION" = 640x480 ] || {
-                echo 'Unsupported first-playable internal resolution.' >&2; return 3;
-            }
+            case "$SH3_INTERNAL_RESOLUTION" in
+                640x480|320x240) ;;
+                *) echo 'Unsupported internal resolution.' >&2; return 3 ;;
+            esac
             mkdir -p "$session/savedata" || return 3
             local display="$session/savedata/disp.ini"
             if [ ! -s "$display" ]; then
@@ -153,7 +156,12 @@ main() {
             if [ -f "$display" ]; then
                 sed '/^resolution=/d' "$display" > "$display.new" || return 3
             fi
-            printf 'resolution=640x480\n' >> "$display.new" || return 3
+            printf 'resolution=%s\n' "$SH3_INTERNAL_RESOLUTION" >> "$display.new" || return 3
+            if [ "${SH3_FPS_LIMIT:-}" = 30 ] && [ "$SH3_INTERNAL_RESOLUTION" = 320x240 ]; then
+                # Keep explicit performance selection identical to measured scene settings.
+                sed -i '/^shadow=/d; /^lensflare_ztest=/d' "$display.new" || return 3
+                printf '%s\n' 'shadow=1' 'lensflare_ztest=1' >> "$display.new" || return 3
+            fi
             mv "$display.new" "$display" || return 3
         fi
         if [ ! -e "$session/sh3.ini" ]; then
@@ -170,7 +178,7 @@ main() {
         status=$?
         if [ "$session" != "$RUN_DIR/session" ]; then
             mkdir "$RUN_DIR/session" || return 3
-            for name in savedata sh3.ini sh3-progs.bin sh3-crash.log; do
+            for name in savedata sh3.ini sh3-progs.bin sh3-gl-cache.bin sh3-crash.log; do
                 if [ -e "$session/$name" ]; then
                     cp -Rp "$session/$name" "$RUN_DIR/session/$name" || return 3
                 fi

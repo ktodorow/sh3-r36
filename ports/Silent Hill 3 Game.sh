@@ -11,11 +11,18 @@ mkdir "$SERVICE_DIR" || { echo 'Service run already exists; preserving evidence.
 run_limits=()
 if [ "${SH3_PHYSICAL_CONTROLS:-0}" = 1 ]; then
     export SH3_INPUT_LOG=1 SH3_GL_BACKEND=gles SH3_SHOW=1 SH3_QUIT_AFTER=900
-    unset SH3_STATS SH3_KEYS SH3_PEEK SH3_SHOT SH3_SHOT_EVERY SH3_PRESENT_DUMP SH3_MONITOR
-    # Bound an unattended launcher screen too; game deadline alone starts after Play.
-    run_limits=(--property=RuntimeMaxSec=930)
-    printf 'scripted_input=0\ninput_log=1\nframe_capture=0\nperformance_sampler=0\nquit_after_seconds=900\n' \
+    unset SH3_STATS SH3_KEYS SH3_PEEK SH3_SHOT SH3_SHOT_EVERY SH3_PRESENT_DUMP
+    performance_sampler=1
+    if [ "${SH3_PHYSICAL_PROFILE:-0}" != 1 ]; then
+        unset SH3_MONITOR SH3_PROFILE SH3_GPU_PROFILE
+        performance_sampler=0
+    fi
+    printf 'scripted_input=0\ninput_log=1\nframe_capture=0\nperformance_sampler=%s\nquit_after_seconds=900\n' "$performance_sampler" \
         > "$SERVICE_DIR/physical-controls.txt"
+fi
+# Bound explicit diagnostics, allowing startup before game timer and report flush.
+if [[ ${SH3_QUIT_AFTER:-} =~ ^[1-9][0-9]*$ ]]; then
+    run_limits=(--property=RuntimeMaxSec=$((SH3_QUIT_AFTER + 90)))
 fi
 privilege=()
 if [ "$(id -u)" -ne 0 ]; then privilege=(sudo -n); fi
@@ -26,7 +33,7 @@ for name in HOME USER LOGNAME SHELL PATH LANG TERM XDG_DATA_HOME XDG_RUNTIME_DIR
     SH3_PORT_ROOT SH3_RUN_ID SH3_MODE SH3_DATA_DIR SH3_PACKAGE_DIR SH3_PREFLIGHT_HEADLESS \
     SH3_KEYS SH3_STATS SH3_GL_BACKEND SH3_SHOW SH3_QUIT_AFTER SH3_PRESENT_DUMP \
     SH3_SEED_SESSION SH3_SESSION_ISOLATED SH3_IMPORT_SESSION SH3_INTERNAL_RESOLUTION SH3_PEEK SH3_INPUT_LOG \
-    SH3_SHOT SH3_SHOT_EVERY SH3_MONITOR; do
+    SH3_SHOT SH3_SHOT_EVERY SH3_MONITOR SH3_PROFILE SH3_GPU_PROFILE SH3_FPS_LIMIT; do
     if [ "${!name+x}" ]; then environment+=("--setenv=$name=${!name}"); fi
 done
 wait_options=()

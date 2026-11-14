@@ -175,6 +175,61 @@ static int culling_sample(void) {
 #endif
 }
 
+static int primitive_sample(void) {
+    if (!dev) return 0;
+    DEVICE(36, 0, 0, 7, 0xff000000, 0x3f800000, 0);
+    solid_quad(.5f, 0xff0000ff, 0);
+    int ok = capture("primitive-triangle.ppm");
+    ok &= pixel(32,24,255,0,0) & pixel(2,2,0,0,0);
+    const float point[] = {0,0,.5f,0,0,1,0,0};
+    const uint16_t index = 0;
+    const char *names[] = {"primitive-point.ppm", "primitive-point-bound.ppm",
+                           "primitive-point-indexed.ppm", "primitive-point-indexed-up.ppm"};
+    dev->palette[0][1] = 0xff00ff00;
+    Res *texture = res_of(dev->tex[0]);
+    texture->dirty = res_of(texture->surf[0][0])->dirty = 1;
+    if (dev->ib) { res_release(dev->ib); dev->ib = 0; }
+    for (int path = 0; path < 4; path++) {
+        DEVICE(36, 0, 0, 7, 0xff000000, 0x3f800000, 0);
+        uint32_t data = copy_guest(point, sizeof point);
+        if (path == 0) ok &= DEVICE(72, 1, 1, data, sizeof point) == 0;
+        else if (path == 3)
+            ok &= DEVICE(73, 1, 0, 1, 1, copy_guest(&index, sizeof index), FMT_INDEX16, data, sizeof point) == 0;
+        else {
+            dev->stream[0] = res_buffer(RES_VB, sizeof point, 0, 0, 0);
+            Res *vb = res_of(dev->stream[0]);
+            memcpy(GPTR(vb->mem), point, sizeof point); vb->dirty = 1;
+            dev->stride[0] = sizeof point;
+            if (path == 1) ok &= DEVICE(70, 1, 0, 1) == 0;
+            else {
+                dev->ib = res_buffer(RES_IB, sizeof index, 0, FMT_INDEX16, 0);
+                Res *ib = res_of(dev->ib);
+                memcpy(GPTR(ib->mem), &index, sizeof index); ib->dirty = 1;
+                dev->base_vertex = 0;
+                ok &= DEVICE(71, 1, 0, 1, 0, 1) == 0;
+                res_release(dev->ib); dev->ib = 0;
+            }
+            res_release(dev->stream[0]); dev->stream[0] = 0;
+        }
+        ok &= capture(names[path]);
+        ok &= pixel(32,24,0,255,0) & pixel(31,24,0,0,0) & pixel(32,23,0,0,0);
+    }
+    DEVICE(36, 0, 0, 7, 0xff000000, 0x3f800000, 0);
+    dev->palette[0][1] = 0xffff0000;
+    texture->dirty = res_of(texture->surf[0][0])->dirty = 1;
+    const float line[][8] = {{-.5f,.5f,.5f,0,0,1,0,0}, {.5f,.5f,.5f,0,0,1,0,0}};
+    ok &= DEVICE(72, 2, 1, copy_guest(line, sizeof line), sizeof line[0]) == 0;
+    ok &= capture("primitive-line.ppm");
+    ok &= pixel(32,12,0,0,255) & pixel(32,24,0,0,0);
+    DEVICE(36, 0, 0, 7, 0xff000000, 0x3f800000, 0);
+    solid_quad(.5f, 0xffff0000, 0);
+    ok &= capture("primitive-triangle-after.ppm");
+    ok &= pixel(32,24,0,0,255) & pixel(2,2,0,0,0);
+    GLenum error = glGetError();
+    printf("primitive_transitions=%s gl_error=%04x\n", ok && !error ? "PASS" : "FAIL", error);
+    return ok && !error;
+}
+
 static int depth_sample(void) {
     if (!dev) return 0;
     DEVICE(36, 0, 0, 7, 0xff000000, 0x3f800000, 0);
@@ -711,6 +766,52 @@ static int front_sample(void) {
 #endif
 }
 
+static int front_swap_modes_sample(void) {
+    int ok = 1;
+    const uint32_t colors[] = {0x25ff0000, 0x2500ff00, 0x250000ff};
+    const uint32_t sizes[][2] = {{64,48}, {80,60}};
+    const uint32_t modes[] = {1,3}; /* DISCARD and COPY */
+    uint32_t pp = galloc(56);
+    for (unsigned size = 0; size < 2; size++) for (unsigned mode = 0; mode < 2; mode++) {
+        uint32_t w = sizes[size][0], h = sizes[size][1];
+        memset(GPTR(pp), 0, 56);
+        MEM32(pp) = w; MEM32(pp+4) = h; MEM32(pp+8) = FMT_A8R8G8B8;
+        MEM32(pp+20) = modes[mode]; MEM32(pp+28) = 1;
+        ok &= !DEVICE(14,pp);
+        uint32_t image = res_surface(w+2,h+2,FMT_A8R8G8B8,0,0);
+        Res *cpu = res_of(image);
+        for (unsigned frame_index = 0; frame_index < 3; frame_index++) {
+            ok &= !DEVICE(36,0,0,1,colors[frame_index],0x3f800000,0);
+            ok &= !DEVICE(15,0,0,0,0);
+            if (modes[mode] == 3) {
+                unsigned char rgba[4];
+                glReadPixels(w/2,h/2,1,1,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+                uint32_t rgb = rgba[0]<<16 | rgba[1]<<8 | rgba[2];
+                ok &= rgb == (colors[frame_index]&0xffffff);
+            }
+            ok &= !DEVICE(36,0,0,1,0xffff00ff,0x3f800000,0);
+            memset(GPTR(cpu->mem),0xcd,cpu->size);
+            ok &= !DEVICE(30,image);
+            printf("front_mode=%u size=%ux%u frame=%u expected=%08x actual=%08x\n",
+                   modes[mode],w,h,frame_index,colors[frame_index]|0xff000000,
+                   MEM32(cpu->mem+(h/2)*cpu->pitch+(w/2)*4));
+            ok &= MEM32(cpu->mem+(h/2)*cpu->pitch+(w/2)*4) == (colors[frame_index]|0xff000000);
+            ok &= MEM32(cpu->mem+w*4) == 0xcdcdcdcd;
+            ok &= MEM32(cpu->mem+h*cpu->pitch) == 0xcdcdcdcd;
+            char name[80];
+            snprintf(name,sizeof name,"front-mode-%u-%u-%u.bgra",modes[mode],w,frame_index);
+            FILE *file = fopen(name,"wb");
+            if (!file) ok = 0;
+            else { ok &= fwrite(GPTR(cpu->mem),1,cpu->size,file) == cpu->size; ok &= !fclose(file); }
+        }
+        res_release(image);
+    }
+    gfree(pp);
+    GLenum error = glGetError();
+    printf("front_swap_modes=%s gl_error=%04x\n",ok && !error ? "PASS" : "FAIL",error);
+    return ok && !error;
+}
+
 static int sampler_sample(void) {
 #ifndef SH3_GLES_SAMPLES
     return 0;
@@ -908,6 +1009,52 @@ static int identity(void) {
     return desktop_reference() ? reference : native;
 }
 
+struct WorkerContextProbe {
+    SDL_GLContext context;
+    SDL_threadID thread;
+    unsigned char pixel[4];
+    char error[256];
+};
+
+static int worker_context_draw(void *data) {
+    struct WorkerContextProbe *probe = data;
+    probe->thread = SDL_ThreadID();
+    if (SDL_GL_MakeCurrent(rt_window, probe->context)) {
+        snprintf(probe->error, sizeof probe->error, "%s", SDL_GetError());
+        return 1;
+    }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(1, 0, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glReadPixels(32, 24, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probe->pixel);
+    GLenum error = glGetError();
+    SDL_ClearError();
+    SDL_GL_SwapWindow(rt_window);
+    snprintf(probe->error, sizeof probe->error, "%s", SDL_GetError());
+    int detached = SDL_GL_MakeCurrent(rt_window, NULL) == 0;
+    return error || !detached || probe->error[0];
+}
+
+static int worker_context_sample(void) {
+    struct WorkerContextProbe probe = {.context = SDL_GL_GetCurrentContext()};
+    SDL_threadID original = SDL_ThreadID();
+    int status = 1;
+    if (SDL_GL_MakeCurrent(rt_window, NULL) == 0) {
+        SDL_Thread *thread = SDL_CreateThread(worker_context_draw, "sh3-gl-probe", &probe);
+        if (thread) SDL_WaitThread(thread, &status);
+        else snprintf(probe.error, sizeof probe.error, "%s", SDL_GetError());
+    } else snprintf(probe.error, sizeof probe.error, "%s", SDL_GetError());
+    int restored = SDL_GL_MakeCurrent(rt_window, probe.context) == 0;
+    int distinct = probe.thread && probe.thread != original;
+    int ok = !status && distinct && restored &&
+        !memcmp(probe.pixel, (unsigned char[]){255,0,255,255}, 4);
+    printf("worker_context=%s distinct_thread=%s restored=%s rgba=%u,%u,%u,%u\n",
+           ok ? "PASS" : "FAIL", distinct ? "yes" : "no", restored ? "yes" : "no",
+           probe.pixel[0], probe.pixel[1], probe.pixel[2], probe.pixel[3]);
+    if (probe.error[0]) printf("worker_context_error=%s\n", probe.error);
+    return ok;
+}
+
 int rt_gles_diagnostics(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     setenv("SH3_SHADER_DUMP", "1", 1);
@@ -923,7 +1070,9 @@ int rt_gles_diagnostics(void) {
     puts("context_created=yes");
     int ok = identity();
     if (ok) {
+        ok &= worker_context_sample();
         ok &= indexed_sample(); ok &= scissor_sample(); ok &= culling_sample();
+        ok &= primitive_sample();
         ok &= depth_sample(); ok &= stencil_sample(); ok &= precision_sample();
         ok &= rhw_depth_sample(); ok &= packed_color_sample();
         ok &= texture_format_sample(); ok &= palette_sample(); ok &= mip_sample();
@@ -935,7 +1084,9 @@ int rt_gles_diagnostics(void) {
         ok &= locked_target_sample();
         ok &= compressed_copy_sample();
         ok &= presentation_sample();
+        ok &= front_swap_modes_sample();
     }
+    gl_thread_stop();
     printf("%s=%s\n", desktop_reference() ? "desktop_reference" : "gles", ok ? "PASS" : "FAIL");
     SDL_GL_DeleteContext(context);
     SDL_DestroyWindow(rt_window);

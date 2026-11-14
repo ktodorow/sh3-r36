@@ -61,6 +61,9 @@
     X(PFNGLATTACHSHADERPROC, glAttachShader) \
     X(PFNGLBINDATTRIBLOCATIONPROC, glBindAttribLocation) \
     X(PFNGLLINKPROGRAMPROC, glLinkProgram) \
+    X(PFNGLPROGRAMBINARYPROC, glProgramBinary) \
+    X(PFNGLGETPROGRAMBINARYPROC, glGetProgramBinary) \
+    X(PFNGLPROGRAMPARAMETERIPROC, glProgramParameteri) \
     X(PFNGLGETPROGRAMIVPROC, glGetProgramiv) \
     X(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog) \
     X(PFNGLUSEPROGRAMPROC, glUseProgram) \
@@ -153,6 +156,9 @@ GL_FUNCS(GL_DECLARE)
 #define glAttachShader p_glAttachShader
 #define glBindAttribLocation p_glBindAttribLocation
 #define glLinkProgram p_glLinkProgram
+#define glProgramBinary p_glProgramBinary
+#define glGetProgramBinary p_glGetProgramBinary
+#define glProgramParameteri p_glProgramParameteri
 #define glGetProgramiv p_glGetProgramiv
 #define glGetProgramInfoLog p_glGetProgramInfoLog
 #define glUseProgram p_glUseProgram
@@ -191,3 +197,7 @@ void gl_load(void);
 extern int gl_es, gl_clip_emulated;
 int gl_has_extension(const char *name);
 void gl_prepare_context(void);
+SDL_GLContext gl_current_context(void);
+int gl_thread_start(void);
+void gl_thread_stop(void);
+void gl_swap_window(SDL_Window *window);

@@ -43,9 +43,32 @@ fi
 if [ -e "$MENU" ] && ! grep -q "^$MARKER" "$MENU"; then
     echo 'Existing runtime menu not project-owned; preserved.' >&2; exit 3
 fi
+if [ "$MODE" = game ]; then
+    performance_menu="$(dirname "$PORT_ROOT")/Silent Hill 3 Performance.sh"
+    if [ -e "$performance_menu" ] && ! grep -q '^# SH3 project performance menu;' "$performance_menu"; then
+        echo 'Existing performance menu not project-owned; preserved.' >&2; exit 3
+    fi
+fi
 cp "$PAYLOAD/ports/$(basename "$MENU")" "$MENU"
 chmod +x "$MENU"
 if [ "$MODE" = game ]; then
+    cp "$PAYLOAD/ports/Silent Hill 3 Performance.sh" "$performance_menu"
+    chmod +x "$performance_menu"
+    if [ -f "$PAYLOAD/performance-cache/sh3-gl-cache.bin" ]; then
+        cache_status=state-absent
+        if [ -d "$PORT_ROOT/state" ]; then
+            cache_status=preserved
+            if [ ! -e "$PORT_ROOT/state/sh3-gl-cache.bin" ]; then
+                cp -n "$PAYLOAD/performance-cache/sh3-gl-cache.bin" "$PORT_ROOT/state/sh3-gl-cache.bin"
+                cache_status=primed
+            fi
+        fi
+        printf 'result=%s\n' "$cache_status" > "$RUN_DIR/program-cache-prime.txt"
+        sha256sum "$PAYLOAD/performance-cache/sh3-gl-cache.bin" >> "$RUN_DIR/program-cache-prime.txt"
+        if [ -f "$PORT_ROOT/state/sh3-gl-cache.bin" ]; then
+            sha256sum "$PORT_ROOT/state/sh3-gl-cache.bin" >> "$RUN_DIR/program-cache-prime.txt"
+        fi
+    fi
     # Window-close probe; watchdog remains failure if game does not handle WM_QUIT.
     export SH3_SESSION_ISOLATED=1
     unset SH3_IMPORT_SESSION SH3_SEED_SESSION
@@ -87,41 +110,70 @@ if [ "$MODE" = game ]; then
                 cp -p "$source_session/$name" "$SH3_SEED_SESSION/$name"
             fi
         done
-        if { [ -d "$PAYLOAD/scene-seed" ] || [ -f "$source_launch/checkpoint-replay.txt" ]; } &&
-            [ -f "$source_session/sh3-progs.bin" ]; then
-            sha256sum "$source_session/sh3-progs.bin" >> "$RUN_DIR/checkpoint-source.sha256"
-            cp -p "$source_session/sh3-progs.bin" "$SH3_SEED_SESSION/sh3-progs.bin"
-            cache=warm
+        if [ -d "$PAYLOAD/scene-seed" ] || [ -f "$source_launch/checkpoint-replay.txt" ]; then
+            for name in sh3-progs.bin sh3-gl-cache.bin; do
+                if [ -f "$source_session/$name" ]; then
+                    sha256sum "$source_session/$name" >> "$RUN_DIR/checkpoint-source.sha256"
+                    cp -p "$source_session/$name" "$SH3_SEED_SESSION/$name"
+                    cache=warm
+                fi
+            done
         fi
-        printf 'source_launch=%s\nprogram_cache=%s\ninternal_resolution=640x480\n' \
-            "$(basename "$source_launch")" "$cache" > "$RUN_DIR/checkpoint-probe.txt"
         export SH3_KEYS='10:Return+0.4,30:Down+0.2,32:Return+0.4,34:Return+0.4,36:Return+0.4,75:S+4'
     fi
     export SH3_STATS=1 SH3_GL_BACKEND=gles SH3_SHOW=1 SH3_QUIT_AFTER=100 SH3_MONITOR=1
     export SH3_SHOT_EVERY=60
+    unset SH3_PROFILE SH3_FPS_LIMIT
     if [ -f "$PAYLOAD/scene-plan.json" ]; then
         cp "$PAYLOAD/scene-plan.json" "$RUN_DIR/scene-plan.json"
         python3 - "$RUN_DIR/scene-plan.json" > "$RUN_DIR/scene-values.txt" <<'PY'
 import json, sys
 plan = json.load(open(sys.argv[1]))
-for key in ("keys", "seconds", "capture_every", "peek"):
-    value = str(plan[key])
+for key in ("keys", "seconds", "capture_every", "peek", "internal_resolution"):
+    value = str(plan.get(key, "640x480") if key == "internal_resolution" else plan[key])
     if "\n" in value or "\r" in value:
         raise ValueError("Invalid scene value")
     print(value)
+print(int(plan.get("profile") is True))
+limit = plan.get("fps_limit", 0)
+if type(limit) is not int or limit not in (0, 30):
+    raise ValueError("Invalid frame limit")
+print(limit)
 PY
         mapfile -t scene_values < "$RUN_DIR/scene-values.txt"
         export SH3_KEYS="${scene_values[0]}" SH3_QUIT_AFTER="${scene_values[1]}"
         export SH3_SHOT_EVERY="${scene_values[2]}" SH3_PEEK="${scene_values[3]}"
+        export SH3_INTERNAL_RESOLUTION="${scene_values[4]}"
+        export SH3_FPS_LIMIT="${scene_values[6]}"
+        if [ "${scene_values[5]}" = 1 ]; then
+            export SH3_PROFILE="$PORT_ROOT/runs/${RUN_ID}-launch/frame-times.csv"
+        fi
+    fi
+    if [ -n "$source_launch" ]; then
+        printf 'source_launch=%s\nprogram_cache=%s\ninternal_resolution=%s\n' \
+            "$(basename "$source_launch")" "$cache" "$SH3_INTERNAL_RESOLUTION" > "$RUN_DIR/checkpoint-probe.txt"
     fi
     printf 'keys=%s\nquit_after_seconds=%s\ncapture_every_frames=%s\ncontinuous_capture=0\n' \
         "$SH3_KEYS" "$SH3_QUIT_AFTER" "$SH3_SHOT_EVERY" > "$RUN_DIR/game-probe.txt"
-    probe_limit=$((SH3_QUIT_AFTER + 45))
+    # Service startup margin90s, stop timeout40s, outer cleanup margin10s.
+    probe_limit=$((SH3_QUIT_AFTER + 140))
     if [ -f "$PAYLOAD/physical-controls" ]; then
         export SH3_PHYSICAL_CONTROLS=1
-        probe_limit=1000
-        printf 'scripted_input=0\ninput_log=1\nframe_capture=0\nperformance_sampler=0\nquit_after_seconds=900\n' \
+        unset SH3_PHYSICAL_PROFILE
+        performance_sampler=0
+        if [ -f "$PAYLOAD/physical-profile" ]; then
+            resolution=$(cat "$PAYLOAD/physical-profile")
+            case "$resolution" in 320x240|640x480) ;; *) echo 'Invalid handheld profile resolution.' >&2; exit 3 ;; esac
+            export SH3_PHYSICAL_PROFILE=1 SH3_INTERNAL_RESOLUTION="$resolution" SH3_MONITOR=1 SH3_GPU_PROFILE=0
+            export SH3_PROFILE="$PORT_ROOT/runs/${RUN_ID}-launch/frame-times.csv"
+            performance_sampler=1
+        fi
+        probe_limit=1040
+        printf 'scripted_input=0\ninput_log=1\nframe_capture=0\nperformance_sampler=%s\nquit_after_seconds=900\n' "$performance_sampler" \
             > "$RUN_DIR/game-probe.txt"
+        if [ "$performance_sampler" = 1 ]; then
+            printf 'internal_resolution=%s\ngpu_timer=0\n' "$SH3_INTERNAL_RESOLUTION" >> "$RUN_DIR/game-probe.txt"
+        fi
     fi
     if [ -f "$PAYLOAD/persistent-state" ]; then
         echo 'state_mode=persistent' >> "$RUN_DIR/game-probe.txt"
@@ -130,7 +182,14 @@ PY
     fi
     # Sparse evidence, avoiding full framebuffer readback and SD write every frame.
     unset SH3_PRESENT_DUMP
-    export SH3_SHOT="$PORT_ROOT/runs/${RUN_ID}-launch/shots"
+    if [ "$SH3_SHOT_EVERY" -eq 0 ]; then
+        unset SH3_SHOT SH3_SHOT_EVERY
+    else
+        export SH3_SHOT="$PORT_ROOT/runs/${RUN_ID}-launch/shots"
+    fi
+    if [ "${SH3_FPS_LIMIT:-0}" = 30 ] && [ "${SH3_INTERNAL_RESOLUTION:-}" = 320x240 ]; then
+        MENU=$performance_menu
+    fi
     status=0
     timeout --kill-after=5s "${probe_limit}s" env SH3_PORT_ROOT="$PORT_ROOT" SH3_RUN_ID="${RUN_ID}-launch" SH3_SERVICE_WAIT=1 \
         SH3_PREFLIGHT_HEADLESS=1 bash "$MENU" || status=$?

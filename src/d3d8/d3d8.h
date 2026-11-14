@@ -65,8 +65,9 @@ typedef struct Dev {
     float vsc[96][4], psc[8][4];
     uint32_t rt, ds;             /* bound surfaces */
     uint32_t backbuffer, autodepth;
-    uint32_t bb_w, bb_h;
+    uint32_t bb_w, bb_h, swap_effect;
     GLuint fbo, vao, stream_buf, index_buf;
+    uint32_t attrib_mask;       /* enabled arrays in this device's VAO; initially all disabled */
     uint32_t *palette[65536];    /* PALETTEENTRY[256] per palette number, allocated by SetPaletteEntries */
     uint32_t pal_version[65536]; /* bumped by SetPaletteEntries: a P8 texture expanded with an older one is redone */
     uint32_t cur_palette;
@@ -79,15 +80,17 @@ uint32_t res_texture(uint32_t w, uint32_t h, uint32_t levels, uint32_t usage, ui
 uint32_t res_surface(uint32_t w, uint32_t h, uint32_t fmt, int is_rt, int is_depth);
 uint32_t res_buffer(int kind, uint32_t size, uint32_t usage, uint32_t fmt_or_fvf, uint32_t pool);
 void res_upload_dirty(Res *t);   /* pushes locked texture levels to GL before a draw samples them */
-void res_bind_targets(void);     /* attaches dev->rt / dev->ds to the FBO */
+void res_bind_targets(void);    /* binds cached FBO for dev->rt / dev->ds */
+void res_bind_backbuffer_read(void);
 /* CopyRects: surface rectangles to another surface (guest copies, then GL). */
 uint32_t res_copy_rects(uint32_t src, uint32_t rects, uint32_t n, uint32_t dst, uint32_t points);
 void res_snapshot_front(void);  /* keeps the presented frame for GetFrontBuffer */
+void res_reset_front(void);
 uint32_t res_read_front(uint32_t dst);
 void res_init_vtables(void);
 
 /* d3d8_shader.c */
-void shader_bind_for_draw(int pretransformed, uint32_t fvf, const int *attr_present);
+uint32_t shader_bind_for_draw(int pretransformed, int points, uint32_t fvf, const int *attr_present);
 uint32_t shader_create_vs(uint32_t decl, uint32_t func);
 uint32_t shader_create_ps(uint32_t func);
 void shader_delete_vs(uint32_t h);

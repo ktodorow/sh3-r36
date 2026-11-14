@@ -138,6 +138,25 @@ class PreflightLauncherTests(LauncherFixture):
         self.assertEqual((seed / "sh3-progs.bin").read_bytes(), b"previous program keys")
 
     @unittest.skipUnless((OWNER / "data").is_dir(), "requires owner game data")
+    def test_checkpoint_reuses_compiled_driver_programs_without_changing_source(self):
+        (self.data / "sh3.exe").symlink_to(OWNER / "sh3.exe")
+        (self.data / "data").symlink_to(OWNER / "data", target_is_directory=True)
+        seed = self.root / "checkpoint"
+        (seed / "savedata").mkdir(parents=True)
+        for name in ("data.001", "data.sys"):
+            (seed / "savedata" / name).write_text("checkpoint")
+        (seed / "sh3-gl-cache.bin").write_bytes(b"previous driver programs")
+        runtime = self.port / "runtime/sh3"
+        runtime.parent.mkdir()
+        runtime.write_text('#!/bin/sh\ncat sh3-gl-cache.bin\n'
+                           'printf changed > sh3-gl-cache.bin\nexit 7\n')
+        runtime.chmod(0o755)
+        result = self.launch(SH3_MODE="game", SH3_SEED_SESSION=str(seed))
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn("previous driver programs", result.stdout)
+        self.assertEqual((seed / "sh3-gl-cache.bin").read_bytes(), b"previous driver programs")
+
+    @unittest.skipUnless((OWNER / "data").is_dir(), "requires owner game data")
     def test_game_replays_checkpoint_in_fresh_session_without_changing_source(self):
         original = OWNER
         (self.data / "sh3.exe").symlink_to(original / "sh3.exe")

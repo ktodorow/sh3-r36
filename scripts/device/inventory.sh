@@ -19,7 +19,8 @@ probe() {
 }
 copy_state() {
     local source=$1 destination=$2 path relative
-    for path in "$source/sh3.ini" "$source/savedata/disp.ini" "$source/savedata/key.ini" \
+    for path in "$source/sh3.ini" "$source/sh3-progs.bin" "$source/sh3-gl-cache.bin" \
+        "$source/savedata/disp.ini" "$source/savedata/key.ini" \
         "$source/savedata/data.sys" "$source"/savedata/data.[0-9][0-9][0-9]; do
         [ -f "$path" ] || continue
         relative=${path#"$source/"}
@@ -32,11 +33,6 @@ if [ -r /proc/sys/kernel/random/boot_id ]; then
     cat /proc/sys/kernel/random/boot_id > "$RUN_DIR/boot-id.txt"
 fi
 copy_state "$PORT_ROOT/state" "$RUN_DIR/persistent-state" || exit 3
-if [ -f "$PORT_ROOT/state/sh3-progs.bin" ]; then
-    mkdir -p "$RUN_DIR/persistent-state" || exit 3
-    cp -p "$PORT_ROOT/state/sh3-progs.bin" "$RUN_DIR/persistent-state/" || exit 3
-    sha256sum "$PORT_ROOT/state/sh3-progs.bin" >> "$RUN_DIR/persistent-state/source.sha256" || exit 3
-fi
 {
     probe kernel uname -srvm
     probe machine uname -m
@@ -53,6 +49,11 @@ fi
     probe memory awk '/MemTotal|MemAvailable|SwapTotal/ {print}' /proc/meminfo
     probe packages dpkg-query -W libc6:arm64 libsdl2-2.0-0:arm64
     probe python python3 --version
+    probe cpu-profiler perf --version
+    probe cpu-profiler-permission perf stat -e cpu-clock -- true
+    if [ -r /proc/sys/kernel/perf_event_paranoid ]; then
+        printf '\n[perf-event-paranoid]\n'; cat /proc/sys/kernel/perf_event_paranoid
+    fi
     printf '\n[graphics-nodes]\n'
     ls -l /dev/mali0 /dev/dri 2>/dev/null || true
 } > "$RUN_DIR/identity.txt" 2> "$RUN_DIR/identity.stderr.txt"

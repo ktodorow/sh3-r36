@@ -1,5 +1,6 @@
 /* IDirect3D8 and IDirect3DDevice8 on OpenGL. */
 #include "d3d8.h"
+#include "profile.h"
 #include <math.h>
 
 Dev *dev;
@@ -154,15 +155,14 @@ void gl_context_open(void) {
 
 METHOD(d3d_CreateDevice, 7) {
     uint32_t pp = ARG(5);
-    rt_log("CreateDevice %ux%u fmt %u windowed %u depth %u/%u flags %08X", MEM32(pp), MEM32(pp + 4),
-           MEM32(pp + 8), MEM32(pp + 28), MEM32(pp + 32), MEM32(pp + 36), ARG(4));
+    rt_log("CreateDevice %ux%u fmt %u windowed %u depth %u/%u flags %08X swap_effect=%u", MEM32(pp), MEM32(pp + 4),
+           MEM32(pp + 8), MEM32(pp + 28), MEM32(pp + 32), MEM32(pp + 36), ARG(4), MEM32(pp + 20));
     if (!dev) {
         gl_context_open();
         rt_log("GL: %s / %s", glGetString(GL_RENDERER), glGetString(GL_VERSION));
         dev = calloc(1, sizeof *dev);
         dev->obj = com_new(device_vtable(), 16);
         res_init_vtables();
-        glGenFramebuffers(1, &dev->fbo);
         glGenVertexArrays(1, &dev->vao);
         glBindVertexArray(dev->vao);
         glGenBuffers(1, &dev->stream_buf);
@@ -173,6 +173,7 @@ METHOD(d3d_CreateDevice, 7) {
      * single precision, and the whole game ran its float logic that way. */
     if (!(ARG(4) & 2)) g_fp_control_word &= ~0x300u;
     MEM32(ARG(6)) = dev->obj;
+    gl_thread_start();
     return 0;
 }
 
@@ -257,6 +258,8 @@ static void device_reset(uint32_t pp) {
     if (!w || !h) { w = 1280; h = 720; }
     dev->bb_w = w;
     dev->bb_h = h;
+    dev->swap_effect = MEM32(pp + 20);
+    res_reset_front();
     if (dev->rt) res_release(dev->rt);
     if (dev->ds) res_release(dev->ds);
     if (dev->backbuffer) res_release(dev->backbuffer);
@@ -327,11 +330,11 @@ static void capture_present(const char *path, int w, int h) {
 }
 
 METHOD(dev_Present, 5) {
+    uint64_t profile_start = profile_stamp();
     int ww, wh;
     SDL_GL_GetDrawableSize(rt_window, &ww, &wh);
     Res *bb = res_of(dev->backbuffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, dev->fbo);
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bb->tex, 0);
+    res_bind_backbuffer_read();
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glDisable(GL_SCISSOR_TEST);
     glClearColor(0, 0, 0, 1);
@@ -357,7 +360,9 @@ METHOD(dev_Present, 5) {
     frame++;
     const char *present_dump = getenv("SH3_PRESENT_DUMP");
     if (present_dump) capture_present(present_dump, ww, wh);
-    SDL_GL_SwapWindow(rt_window);
+    uint64_t swap_start = profile_stamp();
+    gl_swap_window(rt_window);
+    profile_present(profile_start, swap_start);
     static Uint64 stat_t0;
     static int stat_frames;
     if (getenv("SH3_STATS") && ++stat_frames == 120) {  /* debugging: FPS and guest heap */
@@ -382,7 +387,7 @@ METHOD(dev_Present, 5) {
             uint32_t va = (uint32_t)strtoul(p, NULL, 16);
             n += snprintf(line + n, sizeof line - n, " %08X=%08X", va, MEM32(va));
         }
-        rt_log("%s", line);
+        rt_log("%s wall_ms=%llu", line, (unsigned long long)SDL_GetTicks64());
     }
     rt_pump_events();
     res_bind_targets();
@@ -714,7 +719,6 @@ static uint32_t prim_verts(uint32_t t, uint32_t n) {
 /* Vertex attribute locations: D3DVSDE numbering for the fixed pipeline (0 position, 1 blend weights,
  * 2 blend indices, 3 normal, 4 point size, 5 diffuse, 6 specular, 7-14 texcoords); v# for shaders. */
 static void attrib(int loc, int type, GLsizei stride, uintptr_t off) {
-    glEnableVertexAttribArray(loc);
     switch (type) {
     case 0: case 1: case 2: case 3: glVertexAttribPointer(loc, type + 1, GL_FLOAT, 0, stride, (void *)off); break;
     case 4: glVertexAttribPointer(loc, gl_es ? 4 : GL_BGRA, GL_UNSIGNED_BYTE, 1, stride, (void *)off); break;  /* D3DCOLOR */
@@ -727,7 +731,7 @@ static void attrib(int loc, int type, GLsizei stride, uintptr_t off) {
 /* Sets up attributes for stream 0 (FVF) or the declaration's streams. base: GL buffer offsets of each
  * stream's vertex 0; up_stride: stride for DrawPrimitiveUP. Returns 1 when vertices are pretransformed. */
 static int setup_attribs(const uintptr_t *base, const GLuint *bufs, uint32_t up_stride, int *present) {
-    for (int i = 0; i < 16; i++) { glDisableVertexAttribArray(i); present[i] = 0; }
+    for (int i = 0; i < 16; i++) present[i] = 0;
     if (dev->vs < 0xF0000000u) {
         uint32_t fvf = dev->vs, stride = up_stride ? up_stride : dev->stride[0], off = 0;
         if (!bufs[0]) return 0;
@@ -768,8 +772,9 @@ static int setup_attribs(const uintptr_t *base, const GLuint *bufs, uint32_t up_
     return 0;
 }
 
-static void bind_textures(void) {
+static void bind_textures(uint32_t sampler_mask) {
     for (int s = 0; s < MAX_STAGES; s++) {
+        if (!(sampler_mask & (1u << s))) continue;
         glActiveTexture(GL_TEXTURE0 + s);
         Res *t = res_of(dev->tex[s]);
         if (t) res_upload_dirty(t);
@@ -777,15 +782,22 @@ static void bind_textures(void) {
     }
 }
 
-static void draw_setup(const uintptr_t *base, const GLuint *bufs, uint32_t up_stride) {
+static void draw_setup(const uintptr_t *base, const GLuint *bufs, uint32_t up_stride, GLenum mode) {
     int present[16];
     apply_render_states();
-    bind_textures();
     int rhw = setup_attribs(base, bufs, up_stride, present);
+    uint32_t mask = 0;
+    for (int i = 0; i < 16; i++) if (present[i]) mask |= 1u << i;
+    uint32_t changed = mask ^ dev->attrib_mask;
+    for (int i = 0; i < 16; i++) if (changed & (1u << i)) {
+        if (present[i]) glEnableVertexAttribArray(i);
+        else glDisableVertexAttribArray(i);
+    }
+    dev->attrib_mask = mask;
     /* Screen-space vertices are never clipped by depth in D3D; UI quads sit at z = 0 or 1 exactly,
      * which nouveau's rounding pushes just outside the clip volume. */
     if (!gl_es) { if (rhw) glEnable(GL_DEPTH_CLAMP); else glDisable(GL_DEPTH_CLAMP); }
-    shader_bind_for_draw(rhw, dev->vs, present);
+    bind_textures(shader_bind_for_draw(rhw, mode == GL_POINTS, dev->vs, present));
 }
 
 /* The GL buffer of a vertex or index buffer, created and refreshed from the guest copy on the render
@@ -795,6 +807,7 @@ static GLuint gl_buffer(Res *b, GLenum target) {
     glBindBuffer(target, b->buf);
     if (b->dirty) {
         glBufferData(target, b->size, GPTR(b->mem), GL_DYNAMIC_DRAW);
+        profile_buffer_upload(b->size);
         b->dirty = 0;
     }
     return b->buf;
@@ -809,25 +822,31 @@ static void stream_bases(uintptr_t *base, GLuint *bufs) {
 }
 
 METHOD(dev_DrawPrimitive, 4) {
+    uint64_t start = profile_stamp();
+    GLenum mode = prim_mode(ARG(1));
     uintptr_t base[16];
     GLuint bufs[16];
     stream_bases(base, bufs);
-    draw_setup(base, bufs, 0);
-    glDrawArrays(prim_mode(ARG(1)), ARG(2), prim_verts(ARG(1), ARG(3)));
+    draw_setup(base, bufs, 0, mode);
+    glDrawArrays(mode, ARG(2), prim_verts(ARG(1), ARG(3)));
+    profile_draw_end(start);
     return 0;
 }
 
 METHOD(dev_DrawIndexedPrimitive, 6) {
     Res *ib = res_of(dev->ib);
     if (!ib) return D3DERR_INVALIDCALL;
+    uint64_t start = profile_stamp();
+    GLenum mode = prim_mode(ARG(1));
     uintptr_t base[16];
     GLuint bufs[16];
     stream_bases(base, bufs);
-    draw_setup(base, bufs, 0);
+    draw_setup(base, bufs, 0, mode);
     gl_buffer(ib, GL_ELEMENT_ARRAY_BUFFER);
     int is32 = ib->fmt == FMT_INDEX32;
-    glDrawElementsBaseVertex(prim_mode(ARG(1)), prim_verts(ARG(1), ARG(5)), is32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
+    glDrawElementsBaseVertex(mode, prim_verts(ARG(1), ARG(5)), is32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
                              (void *)(uintptr_t)(ARG(4) * (is32 ? 4 : 2)), dev->base_vertex);
+    profile_draw_end(start);
     return 0;
 }
 
@@ -835,31 +854,39 @@ METHOD(dev_DrawIndexedPrimitive, 6) {
 static void up_upload(uint32_t data, uint32_t bytes) {
     glBindBuffer(GL_ARRAY_BUFFER, dev->stream_buf);
     glBufferData(GL_ARRAY_BUFFER, bytes, GPTR(data), GL_STREAM_DRAW);
+    profile_buffer_upload(bytes);
 }
 METHOD(dev_DrawPrimitiveUP, 5) {
+    uint64_t start = profile_stamp();
+    GLenum mode = prim_mode(ARG(1));
     uint32_t n = prim_verts(ARG(1), ARG(2)), stride = ARG(4);
     up_upload(ARG(3), n * stride);
     uintptr_t base[16] = {0};
     GLuint bufs[16] = {dev->stream_buf};
-    draw_setup(base, bufs, stride);
-    glDrawArrays(prim_mode(ARG(1)), 0, n);
+    draw_setup(base, bufs, stride, mode);
+    glDrawArrays(mode, 0, n);
     if (dev->stream[0]) res_release(dev->stream[0]);
     dev->stream[0] = 0;
+    profile_draw_end(start);
     return 0;
 }
 METHOD(dev_DrawIndexedPrimitiveUP, 9) {
+    uint64_t start = profile_stamp();
+    GLenum mode = prim_mode(ARG(1));
     uint32_t nidx = prim_verts(ARG(1), ARG(4)), isz = ARG(6) == FMT_INDEX32 ? 4 : 2, stride = ARG(8);
     up_upload(ARG(7), (ARG(2) + ARG(3)) * stride);
     uintptr_t base[16] = {0};
     GLuint bufs[16] = {dev->stream_buf};
-    draw_setup(base, bufs, stride);
+    draw_setup(base, bufs, stride, mode);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dev->index_buf);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, nidx * isz, GPTR(ARG(5)), GL_STREAM_DRAW);
-    glDrawElements(prim_mode(ARG(1)), nidx, isz == 4 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, 0);
+    profile_buffer_upload(nidx * isz);
+    glDrawElements(mode, nidx, isz == 4 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, 0);
     if (dev->stream[0]) res_release(dev->stream[0]);
     dev->stream[0] = 0;
     if (dev->ib) res_release(dev->ib);
     dev->ib = 0;
+    profile_draw_end(start);
     return 0;
 }
 

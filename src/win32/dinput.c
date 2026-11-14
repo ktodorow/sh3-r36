@@ -423,22 +423,45 @@ static void pad_state(uint32_t dev, uint32_t out, uint32_t size) {
 
 /* Testing: SH3_KEYS="12:Return,14.5:Down,20:Up+8" holds each key for 150 ms (or +seconds) at that many
  * seconds after start. */
-static int scripted_key(int scancode) {
+static void scripted_keys(uint32_t out, uint32_t size) {
+    typedef struct { double at, hold; SDL_Scancode scancode; } KeyEvent;
+    static KeyEvent *events;
+    static size_t count;
+    static int initialized;
     static Uint64 t0;
-    if (!t0) t0 = SDL_GetTicks64();
-    const char *k = getenv("SH3_KEYS");
+    if (!initialized) t0 = SDL_GetTicks64();
     double now = (SDL_GetTicks64() - t0) / 1000.0;
-    while (k && *k) {
-        char name[32] = "";
-        double at = 0, hold = 0.15;
-        int n = 0;
-        if (sscanf(k, "%lf:%31[^,+]%n", &at, name, &n) < 2) break;
-        k += n;
-        if (*k == '+' && sscanf(k, "+%lf%n", &hold, &n) == 1) k += n;
-        if (SDL_GetScancodeFromName(name) == scancode && now >= at && now < at + hold) return 1;
-        if (*k == ',') k++;
+    if (!initialized) {
+        initialized = 1;
+        const char *k = getenv("SH3_KEYS");
+        size_t capacity = 1;
+        for (const char *p = k; p && *p; p++) if (*p == ',') capacity++;
+        events = calloc(capacity, sizeof(*events));
+        if (!events) { rt_log("scripted input allocation failed"); return; }
+        while (k && *k) {
+            char name[32] = "";
+            double at = 0, hold = 0.15;
+            int n = 0;
+            if (sscanf(k, "%lf:%31[^,+]%n", &at, name, &n) < 2) break;
+            k += n;
+            if (*k == '+' && sscanf(k, "+%lf%n", &hold, &n) == 1) k += n;
+            if (count == capacity) {
+                if (capacity > SIZE_MAX / 2 / sizeof(*events)) break;
+                KeyEvent *grown = realloc(events, capacity * 2 * sizeof(*events));
+                if (!grown) { rt_log("scripted input allocation failed"); break; }
+                events = grown;
+                capacity *= 2;
+            }
+            events[count++] = (KeyEvent){at, hold, SDL_GetScancodeFromName(name)};
+            if (*k == ',') k++;
+        }
     }
-    return 0;
+    for (size_t i = 0; i < count; i++) {
+        SDL_Scancode scancode = events[i].scancode;
+        if (now >= events[i].at && now < events[i].at + events[i].hold && scancode > SDL_SCANCODE_UNKNOWN &&
+            scancode < SDL_NUM_SCANCODES && dik[scancode] && dik[scancode] < size)
+            *(uint8_t *)GPTR(out + dik[scancode]) = 0x80;
+    }
 }
 
 METHOD(dev_GetDeviceState, 3) {
@@ -449,8 +472,9 @@ METHOD(dev_GetDeviceState, 3) {
         const uint8_t *k = SDL_GetKeyboardState(&n);
         memset(GPTR(out), 0, size);
         int scripted = getenv("SH3_KEYS") != NULL;  /* a scripted run ignores the real keyboard */
-        for (int i = 0; i < n; i++)
-            if ((scripted ? scripted_key(i) : k[i]) && dik[i] && dik[i] < size) *(uint8_t *)GPTR(out + dik[i]) = 0x80;
+        if (scripted) scripted_keys(out, size);
+        else for (int i = 0; i < n; i++)
+            if (k[i] && dik[i] && dik[i] < size) *(uint8_t *)GPTR(out + dik[i]) = 0x80;
     } else if (kind == DEV_PAD) pad_state(THIS, out, size);
     else memset(GPTR(out), 0, size);
     return 0;

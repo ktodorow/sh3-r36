@@ -1,6 +1,7 @@
 /* GLSL for every draw: the fixed-function pipeline generated from device state, or vs_1_1 / ps_1_x
  * bytecode translated once. Programs are cached by the state that shaped them. */
 #include "d3d8.h"
+#include "program_binary.h"
 #include <stdarg.h>
 #include <math.h>
 #include <SDL2/SDL.h>
@@ -21,7 +22,7 @@ static void sp(Str *b, const char *fmt, ...) {
 }
 
 /* ---- shader objects created by the game ---- */
-typedef struct { int used; char *glsl; VsInput in[16]; float consts[96][4]; uint8_t const_set[96]; int has_func; uint32_t hash; } VShader;
+typedef struct { int used; char *glsl; VsInput in[16]; float consts[96][4]; uint8_t const_set[96]; int has_func, constant_count; uint32_t hash; } VShader;
 typedef struct { int used; char *glsl; uint32_t hash; } PShader;
 static uint32_t glsl_hash(const char *s) {
     uint32_t h = 2166136261u;
@@ -215,9 +216,10 @@ static void parse_decl(VShader *v, uint32_t decl) {
     }
 }
 
-static char *translate_vs(uint32_t func, const VsInput *in) {
+static char *translate_vs(uint32_t func, const VsInput *in, int *constant_count) {
     Str b = {0};
-    sp(&b, "uniform vec4 c[96];\nint a0 = 0;\n");
+    int constants = 0;
+    sp(&b, "int a0 = 0;\n");
     for (int i = 0; i < 16; i++) {
         if (gl_es && in[i].stream >= 0 && in[i].type == 4)
             sp(&b, "layout(location = %d) in vec4 raw_v%d;\n#define v%d raw_v%d.bgra\n", i, i, i, i);
@@ -236,11 +238,27 @@ static char *translate_vs(uint32_t func, const VsInput *in) {
         if (op >= 90 || (op && !n_params[op])) rt_fatal("vs: unknown opcode %u", op);
         uint32_t prm[8];
         for (int i = 0; i < n_params[op]; i++) prm[i] = MEM32(p + 4 + 4 * i);
+        for (int i = 1; i < n_params[op]; i++) {
+            if (((prm[i] >> 28) & 7) != 2) continue;
+            int end = (prm[i] & 0x7FF) + 1;
+            if (op >= 20 && op <= 24 && i == 2) {
+                static const int rows[] = {4, 3, 4, 3, 2};
+                end += rows[op - 20] - 1;
+            }
+            /* Relative addressing can reach every register, including zero-weight bones. */
+            if ((prm[i] & (1u << 13)) || end > 96) end = 96;
+            if (end > constants) constants = end;
+        }
         if (op && !emit_alu(&b, op, prm, 1)) rt_fatal("vs: unsupported opcode %u", op);
         p += 4 + 4 * n_params[op];
     }
     sp(&b, "}\n");
-    return b.s;
+    Str source = {0};
+    if (constants) sp(&source, "uniform vec4 c[%d];\n", constants);
+    sp(&source, "%s", b.s);
+    free(b.s);
+    *constant_count = constants;
+    return source.s;
 }
 
 uint32_t shader_create_vs(uint32_t decl, uint32_t func) {
@@ -251,7 +269,7 @@ uint32_t shader_create_vs(uint32_t decl, uint32_t func) {
             v->used = 1;
             parse_decl(v, decl);
             v->has_func = func != 0;
-            if (func) v->glsl = translate_vs(func, v->in);
+            if (func) v->glsl = translate_vs(func, v->in, &v->constant_count);
             v->hash = func ? glsl_hash(v->glsl) : 0;
             progcache_shader_created();
             return VS_BASE + i;
@@ -324,7 +342,7 @@ void shader_delete_ps(uint32_t h) {
 
 typedef struct {
     uint32_t vs, ps;          /* shader handles (vs: 0 or FFP with declaration -> ffp) */
-    uint8_t ffp_vs, rhw, normal, diffuse, specular, lighting, normalize, localviewer, colorvertex;
+    uint8_t ffp_vs, rhw, points, normal, diffuse, specular, lighting, normalize, localviewer, colorvertex;
     uint8_t diffsrc, ambsrc, specsrc, emissrc, vblend;
     uint8_t light[8];
     uint8_t tci[8], tcgen[8], ttff[8], tcsize[8];
@@ -335,8 +353,14 @@ typedef struct {
 typedef struct Prog {
     Key key;
     GLuint id;
+    uint32_t sampler_mask;
+    int constant_count;
     GLint c, pc, wvp, wv, normalm, proj, texm, mat, amb, lt, ltcol, ltpos, ltdir, ltatt, ltspot, world;
     GLint vp, halfpix, tfactor, fogcolor, fogparams, alpharef, viewproj, bumpenv;
+    float last_halfpix[2], last_vp[4];
+    uint8_t halfpix_valid, vp_valid;
+    float last_c[96][4], last_pc[8][4];
+    uint8_t c_valid, pc_valid;
     struct Prog *next;
 } Prog;
 static Prog *progs[4096];
@@ -536,7 +560,9 @@ static Prog *build(const Key *k) {
      * recover linear screen depth per fragment before clamping (not per vertex). */
     if (gl_es && k->rhw) sp(&v, "  vRhwDepth = p.z; p.z = 0.5 * p.w;\n");
     if (gl_clip_emulated) sp(&v, "  p.y = -p.y; p.z = 2.0 * p.z - p.w;\n");
-    sp(&v, "  gl_Position = p;\n  gl_PointSize = max(pts, 1.0);\n}\n");
+    sp(&v, "  gl_Position = p;\n");
+    if (k->points) sp(&v, "  gl_PointSize = max(pts, 1.0);\n");
+    sp(&v, "}\n");
 
     sp(&f, "%s", header);
     if (gl_es && k->rhw) sp(&f, "in float vRhwDepth;\n");
@@ -583,31 +609,38 @@ static Prog *build(const Key *k) {
         }
         serial++;
     }
-    GLuint vs = compile(GL_VERTEX_SHADER, v.s), fs = compile(GL_FRAGMENT_SHADER, f.s);
     GLuint id = glCreateProgram();
-    glAttachShader(id, vs);
-    glAttachShader(id, fs);
-    glLinkProgram(id);
-    GLint ok;
-    glGetProgramiv(id, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[4096];
-        glGetProgramInfoLog(id, sizeof log, NULL, log);
-        rt_fatal("GLSL link failed: %s\n%s\n%s", log, v.s, f.s);
+    if (!program_binary_load(id, v.s, f.s)) {
+        GLuint vs = compile(GL_VERTEX_SHADER, v.s), fs = compile(GL_FRAGMENT_SHADER, f.s);
+        glProgramParameteri(id, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
+        glAttachShader(id, vs);
+        glAttachShader(id, fs);
+        glLinkProgram(id);
+        GLint ok;
+        glGetProgramiv(id, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            char log[4096];
+            glGetProgramInfoLog(id, sizeof log, NULL, log);
+            rt_fatal("GLSL link failed: %s\n%s\n%s", log, v.s, f.s);
+        }
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        program_binary_save(id, v.s, f.s);
     }
-    glDeleteShader(vs);
-    glDeleteShader(fs);
     free(v.s);
     free(f.s);
 
     Prog *p = calloc(1, sizeof *p);
     p->key = *k;
     p->id = id;
+    p->constant_count = k->ffp_vs ? 0 : vs_of(k->vs)->constant_count;
     glUseProgram(id);
     for (int s = 0; s < 8; s++) {
         char n[8];
         snprintf(n, sizeof n, "s%d", s);
-        glUniform1i(glGetUniformLocation(id, n), s);
+        GLint location = glGetUniformLocation(id, n);
+        if (location >= 0) p->sampler_mask |= 1u << s;
+        glUniform1i(location, s);
     }
 #define U(field, name) p->field = glGetUniformLocation(id, name)
     U(c, "c"); U(pc, "pc"); U(wvp, "uWVP"); U(wv, "uWV"); U(normalm, "uNormalM"); U(proj, "uProj");
@@ -627,7 +660,7 @@ static Prog *build(const Key *k) {
  * the shaders they need (handles differ between runs, hashes do not). */
 typedef struct { Key key; uint32_t vsh, psh; } ProgRec;
 #define PROGCACHE_FILE "sh3-progs.bin"
-#define PROGCACHE_MAGIC 0x53483350u  /* "SH3P" */
+#define PROGCACHE_MAGIC 0x53483352u  /* Primitive key and bounded constant declarations. */
 static ProgRec *recs;
 static size_t nrecs, caprecs, npending;
 static uint8_t *rec_done;
@@ -757,9 +790,10 @@ static void normal_matrix(float *out, const float *m) {
 static void color4(float *o, uint32_t c) { o[0] = (c >> 16 & 255) / 255.f; o[1] = (c >> 8 & 255) / 255.f; o[2] = (c & 255) / 255.f; o[3] = (c >> 24) / 255.f; }
 static float rsf(uint32_t i) { float f; memcpy(&f, &dev->rs[i], 4); return f; }
 
-void shader_bind_for_draw(int rhw, uint32_t vs, const int *present) {
+uint32_t shader_bind_for_draw(int rhw, int points, uint32_t vs, const int *present) {
     Key k;
     memset(&k, 0, sizeof k);
+    k.points = points;
     VShader *v = vs >= VS_BASE ? vs_of(vs) : NULL;
     k.ffp_vs = !v || !v->has_func;
     k.vs = k.ffp_vs ? 0 : vs;
@@ -813,14 +847,32 @@ void shader_bind_for_draw(int rhw, uint32_t vs, const int *present) {
     glUseProgram(p->id);
 
     /* Uniforms */
-    glUniform2f(p->halfpix, 1.0f / dev->vp_w, -1.0f / dev->vp_h);
+    float halfpix[2] = {1.0f / dev->vp_w, -1.0f / dev->vp_h};
+    if (p->halfpix >= 0 && (!p->halfpix_valid || memcmp(p->last_halfpix, halfpix, sizeof halfpix))) {
+        glUniform2f(p->halfpix, halfpix[0], halfpix[1]);
+        memcpy(p->last_halfpix, halfpix, sizeof halfpix);
+        p->halfpix_valid = 1;
+    }
     float vp[4] = {dev->vp_x, dev->vp_y, dev->vp_w, dev->vp_h};
-    if (p->vp >= 0) glUniform4fv(p->vp, 1, vp);
+    if (p->vp >= 0 && (!p->vp_valid || memcmp(p->last_vp, vp, sizeof vp))) {
+        glUniform4fv(p->vp, 1, vp);
+        memcpy(p->last_vp, vp, sizeof vp);
+        p->vp_valid = 1;
+    }
     if (p->c >= 0) {
         if (v) for (int i = 0; i < 96; i++) if (v->const_set[i]) memcpy(dev->vsc[i], v->consts[i], 16);
-        glUniform4fv(p->c, 96, &dev->vsc[0][0]);
+        size_t bytes = p->constant_count * sizeof dev->vsc[0];
+        if (!p->c_valid || memcmp(p->last_c, dev->vsc, bytes)) {
+            glUniform4fv(p->c, p->constant_count, &dev->vsc[0][0]);
+            memcpy(p->last_c, dev->vsc, bytes);
+            p->c_valid = 1;
+        }
     }
-    if (p->pc >= 0) glUniform4fv(p->pc, 8, &dev->psc[0][0]);
+    if (p->pc >= 0 && (!p->pc_valid || memcmp(p->last_pc, dev->psc, sizeof p->last_pc))) {
+        glUniform4fv(p->pc, 8, &dev->psc[0][0]);
+        memcpy(p->last_pc, dev->psc, sizeof p->last_pc);
+        p->pc_valid = 1;
+    }
     if (p->wvp >= 0) {
         float wv[16], wvp[16], vpm[16], nm[9];
         mat_mul(wv, dev->world[0], dev->view);
@@ -874,9 +926,16 @@ void shader_bind_for_draw(int rhw, uint32_t vs, const int *present) {
 
     /* Samplers follow the texture stage states. */
     static GLuint samplers[8];
-    if (!samplers[0]) glGenSamplers(8, samplers);
+    static uint32_t sampler_state[8][7];
+    static uint8_t sampler_valid[8];
+    if (!samplers[0]) {
+        glGenSamplers(8, samplers);
+        for (int s = 0; s < 8; s++) glBindSampler(s, samplers[s]);
+    }
     for (int s = 0; s < 8; s++) {
         uint32_t *t = dev->tss[s];
+        const uint32_t state[7] = {t[13], t[14], t[25], t[16], t[17], t[18], t[15]};
+        if (sampler_valid[s] && !memcmp(sampler_state[s], state, sizeof state)) continue;
         static const GLint wrap[6] = {GL_REPEAT, GL_REPEAT, GL_MIRRORED_REPEAT, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_BORDER, GL_MIRROR_CLAMP_TO_EDGE};
         glSamplerParameteri(samplers[s], GL_TEXTURE_WRAP_S, wrap[t[13] < 6 ? t[13] : 1]);
         glSamplerParameteri(samplers[s], GL_TEXTURE_WRAP_T, wrap[t[14] < 6 ? t[14] : 1]);
@@ -890,6 +949,8 @@ void shader_bind_for_draw(int rhw, uint32_t vs, const int *present) {
         float bc[4];
         color4(bc, t[15]);
         glSamplerParameterfv(samplers[s], GL_TEXTURE_BORDER_COLOR, bc);
-        glBindSampler(s, samplers[s]);
+        memcpy(sampler_state[s], state, sizeof state);
+        sampler_valid[s] = 1;
     }
+    return p->sampler_mask;
 }

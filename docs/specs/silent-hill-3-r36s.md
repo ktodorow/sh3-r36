@@ -38,6 +38,15 @@ Full port includes complete campaign, original FMVs, real-time cutscenes, audio,
 
 Stable 30 FPS is target, not established result or average-FPS shortcut. Frame budget is approximately 33.33 ms. Report p50/p95/p99/max, sustained dips, loading stalls, shader warm-up, and audio underruns separately. Exact allowance for rare loading/transition stalls remains open before final acceptance; do not invent a numeric waiver or silently lower target. FMVs retain source media cadence and duration rather than being forced to gameplay frame rate.
 
+Owner performance update, 2026-11-14: retain 30 FPS target; brief drops to 25 FPS
+are acceptable, drops to15–20 FPS are not. Report dip depth and duration rather
+than passing a run from its average. No exact duration allowance has been agreed.
+Owner cannot provide further handheld checks during this optimization work and
+authorizes unattended movement/combat, other levels and publicly available saves
+where compatible. Keep downloaded saves in isolated test sessions, preserve owner
+progress, verify actual level/movement reached, and distinguish automated evidence
+from physical audiovisual acceptance.
+
 ## User Stories
 
 1. As an R36S owner, I want to launch Silent Hill 3 from Ports, so that I can play using normal handheld workflow.

@@ -10,7 +10,7 @@ SCENES = json.loads((ROOT / "scripts/scenes.json").read_text())
 def seed_hashes(seed):
     return {name: hashlib.sha256((seed / name).read_bytes()).hexdigest()
             for name in ("savedata/data.001", "savedata/data.sys", "savedata/disp.ini",
-                         "savedata/key.ini", "sh3-progs.bin") if (seed / name).is_file()}
+                         "savedata/key.ini", "sh3-progs.bin", "sh3-gl-cache.bin") if (seed / name).is_file()}
 
 
 def scene_identity(name, seed=None):
