@@ -1,5 +1,7 @@
 # Silent Hill 3 R36S — approved ticket breakdown
 
+Current scheduling: [performance-first priority order](silent-hill-3-r36s/README.md#current-priority-order), requested 2026-11-14. #13/#14 take precedence over original-movie implementation. Status statements and initial frontier below describe original 2026-11-11 publication; #1–#9 are now closed. Stable plan IDs, acceptance scopes and native blocking relationships remain unchanged.
+
 Structure and subsequent publication approved by user on 2026-11-11. GitHub holds current task history; this file records approved breakdown. All [19 implementation issues](silent-hill-3-r36s/README.md) are published, verified open and unlabeled, with 26 native blocking relationships. Local files preserve approved scopes. No capability gate passed.
 
 Canonical requirements: [Silent Hill 3 R36S spec](../specs/silent-hill-3-r36s.md). Research, glossary and ADR links remain in spec. Approved scopes below preserve confirmed launcher → game session → frontend boundary. Host fixtures cover launcher failures and cleanup only; runtime/graphics/media/input/performance acceptance needs actual R36S evidence. Future behavior changes require observed RED–GREEN–REFACTOR under project workflow; documentation drafting uses coverage/dependency validation.

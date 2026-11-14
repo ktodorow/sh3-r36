@@ -1,6 +1,6 @@
 # Deliver full Silent Hill 3 port on R36S with native GLES3
 
-Feature overview retained from spec drafting. Implementation tracked by [19 published issues](silent-hill-3-r36s/README.md), all open and unlabeled; no separate parent issue created. Do not apply `ready-for-agent`. Canonical requirements: [Silent Hill 3 R36S spec](../specs/silent-hill-3-r36s.md). [Approved breakdown](silent-hill-3-r36s-ticket-breakdown.md) preserves scope and dependency design. Publication does not establish implementation acceptance.
+Feature overview retained from spec drafting. Implementation tracked by [19 published issues](silent-hill-3-r36s/README.md): #1–#9 closed and #10–#19 open as checked 2026-11-14. Current [priority order](silent-hill-3-r36s/README.md#current-priority-order) puts #13/#14 gameplay performance first; original-movie work follows at lower priority. No separate parent issue created. Do not apply `ready-for-agent`. Canonical requirements: [Silent Hill 3 R36S spec](../specs/silent-hill-3-r36s.md). [Approved breakdown](silent-hill-3-r36s-ticket-breakdown.md) preserves scope and dependency design. Publication does not establish implementation acceptance.
 
 ## Problem Statement
 
@@ -26,9 +26,9 @@ Canonical spec contains 42 user stories covering complete campaign, original mov
 
 User-confirmed public boundary: installed PortMaster launcher → complete game session → clean frontend return. Actual R36S evidence required for graphics, movies, physical input, audio, saves, and performance. Host fixtures cover launcher failures/cleanup only. Behavior changes use observed RED–GREEN–REFACTOR.
 
-First actionable work: verify supported owner data, prepare documented scripted target inventory and reusable build workflow, then establish actual runtime/GLES capabilities. Capability gates in canonical spec prevent dependent implementation from treating blocker reports or another game's results as passes.
+Next priority: complete #13 profiling and #14 verified 30 FPS profile, including remaining shader/loading stalls and broader representative gameplay checks. Capability gates in canonical spec still govern dependent implementation and final sign-off; task priority does not waive movie-aware cleanup, hot-session or campaign prerequisites.
 
-Acceptance requires complete campaign and endings, all original movies, correct rendering/timing, reachable controls, persistent saves/settings, reliable audio/cleanup, bounded memory, and measured stability. No SH3 device gate has passed; no 30 FPS result exists.
+Acceptance requires complete campaign and endings, all original movies, correct rendering/timing, reachable controls, persistent saves/settings, reliable audio/cleanup, bounded memory, and measured stability. Published #9/#13/#14 handoffs contain sampled 320×240 gameplay near 30 FPS; final profile and Full port acceptance remain open.
 
 ## Out of Scope
 
